@@ -609,7 +609,7 @@ func (b *bgSupervisor) cancelJob(callerSessionID, jobID string) (tools.BgCancelO
 		return tools.BgCancelOutcome{}, fmt.Errorf("bg_cancel: no background task %q in this session", jobID)
 	}
 	if status != BgStatusRunning {
-		return tools.BgCancelOutcome{OK: false, Status: status, Kind: kind, Notice: fmt.Sprintf("Background task %s already finished (status %s) — nothing to cancel.", label, status)}, nil
+		return tools.BgCancelOutcome{OK: false, Status: status, Kind: kind, Label: label, Notice: fmt.Sprintf("Background task %s already finished (status %s) — nothing to cancel.", label, status)}, nil
 	}
 	creply := make(chan any, 1)
 	select {
@@ -623,12 +623,12 @@ func (b *bgSupervisor) cancelJob(callerSessionID, jobID string) (tools.BgCancelO
 			return tools.BgCancelOutcome{}, fmt.Errorf("could not persist cancellation for background task %s: %w", label, cerr)
 		}
 		if ok, _ := r.(bool); !ok {
-			return tools.BgCancelOutcome{OK: false, Status: status, Kind: kind, Notice: fmt.Sprintf("Background task %s already finished — nothing to cancel.", label)}, nil
+			return tools.BgCancelOutcome{OK: false, Status: status, Kind: kind, Label: label, Notice: fmt.Sprintf("Background task %s already finished — nothing to cancel.", label)}, nil
 		}
 	case <-time.After(replyTimeout):
 		return tools.BgCancelOutcome{}, fmt.Errorf("bg supervisor unreachable")
 	}
-	return tools.BgCancelOutcome{OK: true, Status: BgStatusCancelled, Kind: kind, Notice: fmt.Sprintf("Background task %s canceled: the work is stopped and its result will NOT be delivered. Re-run it differently instead of waiting.", label)}, nil
+	return tools.BgCancelOutcome{OK: true, Status: BgStatusCancelled, Kind: kind, Label: label, Notice: fmt.Sprintf("Background task %s canceled: the work is stopped and its result will NOT be delivered. Re-run it differently instead of waiting.", label)}, nil
 }
 
 // ---- delivery (completion/cancel notices to the owner session) ----

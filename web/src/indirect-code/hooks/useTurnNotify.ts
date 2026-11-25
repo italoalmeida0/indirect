@@ -1,6 +1,7 @@
-import { createSignal } from "solid-js";
+import { createSignal, getOwner, onCleanup } from "solid-js";
 import type { DaemonMessage } from "../daemon-protocol";
 import type { RemoteHostDto } from "../../api";
+import type { ActivePresence } from "../utils/activePresence";
 
 /**
  * Turn-end browser notification (Camada A: at least one tab open).
@@ -102,7 +103,14 @@ export function notifyTag(prefix: string, hostId: string, sessionId: string): st
 }
 function playChime(): void {
   try {
-    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    const win =
+      typeof window !== "undefined"
+        ? (window as Window & { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext })
+        : undefined;
+    const Ctx =
+      win?.AudioContext ||
+      win?.webkitAudioContext ||
+      (typeof AudioContext !== "undefined" ? AudioContext : undefined);
     if (!Ctx) return;
     const ctx: AudioContext = new Ctx();
     void ctx.resume?.().catch(() => {});
@@ -188,6 +196,12 @@ export function createTurnNotify(opts: {
   activeHostId?: () => string;
   activeSessionId?: () => string;
   isViewportActive?: () => boolean;
+  /** High-precision browser presence tracker (visibility + focus + recent activity). */
+  activePresence?: ActivePresence;
+  /** Full active-viewing predicate for a target host+session (overrides simpler checks). */
+  isActivelyViewingSession?: (hostId: string, sessionId: string) => boolean;
+  /** Injectable sound player for deterministic testing (default: Web Audio chime). */
+  playSound?: () => void;
 }) {
   const [notifyOn, setNotifyOn] = createSignal(isTurnNotifyEnabled());
   const [soundOn, setSoundOn] = createSignal(isTurnSoundEnabled());
@@ -292,27 +306,45 @@ export function createTurnNotify(opts: {
     return notifiesOnTurnEnd(session);
   }
 
-  function emitFallbackToast(target: TurnNotifyTarget, isTest: boolean): void {
-    if (!isTest) {
-      const visibleAndFocused = opts.isViewportActive
-        ? opts.isViewportActive()
-        : typeof document !== "undefined" &&
-          document.visibilityState === "visible" &&
-          (typeof document.hasFocus !== "function" || document.hasFocus());
-      const isForeground =
-        Boolean(opts.activeHostId && opts.activeSessionId) &&
-        opts.activeHostId!() === target.hostId &&
-        opts.activeSessionId!() === target.sessionId;
-      if (visibleAndFocused && isForeground) return;
+  /** Whether the user is actively viewing this exact host+session right now. */
+  function isActivelyViewing(hostId: string, sessionId: string): boolean {
+    if (!hostId || !sessionId) return false;
+    if (opts.isActivelyViewingSession) {
+      return opts.isActivelyViewingSession(hostId, sessionId);
     }
+    if (!opts.activeHostId || !opts.activeSessionId) return false;
+    if (opts.activePresence) {
+      return opts.activePresence.isActivelyViewingSession(hostId, sessionId, {
+        activeHostId: opts.activeHostId,
+        activeSessionId: opts.activeSessionId,
+      });
+    }
+    if (opts.activeHostId() !== hostId || opts.activeSessionId() !== sessionId) return false;
+    if (opts.isViewportActive) {
+      return opts.isViewportActive();
+    }
+    return (
+      typeof document !== "undefined" &&
+      (document.visibilityState ?? "visible") === "visible" &&
+      (typeof document.hasFocus !== "function" || document.hasFocus())
+    );
+  }
+
+  function emitFallbackToast(target: TurnNotifyTarget): void {
     const prefix = turnToastLabel(target.disposition);
     const text = target.title ? `${prefix}: ${target.title}` : prefix;
     opts.toast(text, target.disposition === "error" ? "err" : "ok");
   }
 
+  const triggerSound = opts.playSound ?? playChime;
+
   function showNotification(target: TurnNotifyTarget, isTest = false): void {
     // Interactive modes (learning/talk) are watched up-close: stay silent.
     if (!isTest && !shouldNotify(target.hostId, target.sessionId)) return;
+    // User is actively looking at / interacting with this exact host+session:
+    // suppress OS popup, fallback toast, AND sound chime (the finished reply,
+    // ApprovalCard, or QuestionModal is already right in front of them).
+    if (!isTest && isActivelyViewing(target.hostId, target.sessionId)) return;
     const { title, body } = turnNotifyText(target);
     const go = () => opts.onOpenSession(target.hostId, target.sessionId);
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
@@ -330,12 +362,12 @@ export function createTurnNotify(opts: {
           n.close();
         };
       } catch {
-        emitFallbackToast(target, isTest);
+        emitFallbackToast(target);
       }
     } else {
-      emitFallbackToast(target, isTest);
+      emitFallbackToast(target);
     }
-    if (soundOn()) playChime();
+    if (soundOn()) triggerSound();
   }
 
   function notifyWait(
@@ -481,7 +513,17 @@ export function createTurnNotify(opts: {
     });
   }
 
-  return { notifyOn, soundOn, permission, setEnabled, setSound, ensurePermission, noteMessage, testNotify };
+  function dispose(): void {
+    for (const t of fatalTimers.values()) clearTimeout(t);
+    fatalTimers.clear();
+    pendingFatal.clear();
+  }
+
+  if (getOwner()) {
+    onCleanup(dispose);
+  }
+
+  return { notifyOn, soundOn, permission, setEnabled, setSound, ensurePermission, noteMessage, testNotify, dispose };
 }
 
 export type TurnNotify = ReturnType<typeof createTurnNotify>;

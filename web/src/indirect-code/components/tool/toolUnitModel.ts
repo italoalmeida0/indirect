@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, on } from "solid-js";
+import { createMemo, createSignal, untrack } from "solid-js";
 import { tryParseArgs } from "../../utils/tools";
 import {
   isHeaderOnlySleep,
@@ -14,17 +14,38 @@ import { bodyWithoutFooter, stripToolEnvelopeDetailed, type FooterFact } from ".
 import type { ToolUnit } from "../../types";
 import type { TranscriptRenderCtx } from "../TranscriptBlocks";
 
-/** Manual choices survive snapshots, but expire when the activity phase changes. */
+/**
+ * Disclosure state machine for live/finished transcript blocks and tool rows.
+ *
+ * Manual toggles are stamped with a monotonic phase generation so they survive
+ * unrelated snapshots and clock ticks within the same phase, and expire
+ * synchronously (zero-flash) when `phase` transitions (e.g. active -> finished)
+ * while `allowAutomatic()` holds — preserving any post-finish manual opens.
+ */
 export function createDisclosure(phase: () => string, autoOpen: () => boolean, allowAutomatic = () => true) {
-  const [manual, setManual] = createSignal<boolean>();
-  // Preserve the reader's expanded content when work finishes off the tail.
+  const [manual, setManual] = createSignal<{ gen: number; open: boolean }>();
+  // Pure reactive phase generation memo: isolates phase() inside its own child
+  // computation (never subscribing an enclosing <Show>/<For>) and avoids
+  // mutating closure state inside getters across multiple observers.
+  const phaseState = createMemo<{ phase: string; gen: number }>((previous) => {
+    const next = phase();
+    if (previous === undefined) return { phase: next, gen: 0 };
+    if (next === previous.phase) return previous;
+    return { phase: next, gen: untrack(allowAutomatic) ? previous.gen + 1 : previous.gen };
+  });
+  // Preserve expanded state across phase transitions only when automatic
+  // collapse is explicitly deferred (e.g. unpinned thinking-only reader).
   const automatic = createMemo<boolean>((previous) => {
     const next = autoOpen();
-    return previous !== undefined && !allowAutomatic() ? previous : next;
+    return previous !== undefined && !untrack(allowAutomatic) ? previous : next;
   });
-  createEffect(on(phase, () => { if (allowAutomatic()) setManual(undefined); }, { defer: true }));
-  const open = () => manual() ?? automatic();
-  return { open, toggle: () => setManual(!open()) };
+  const open = () => {
+    const g = phaseState().gen;
+    const current = manual();
+    if (current !== undefined && current.gen === g) return current.open;
+    return automatic();
+  };
+  return { open, toggle: () => setManual({ gen: phaseState().gen, open: !open() }) };
 }
 
 /** Reactive model of a tool row: memos derived from ToolUnit.

@@ -31,7 +31,7 @@ export function DisclosureTrigger(props: DisclosureTriggerProps) {
       aria-label={props["aria-label"]}
       data-step-rail-header={props["data-step-rail-header"]}
       onClick={props.onClick}
-      class={`group/disc flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 ${props.paddingClass ?? "py-1"} items-center gap-1.5 rounded-md text-left cursor-pointer hover:bg-surface-muted/60 transition-colors ${props.class ?? ""}`}
+      class={`group/disc flex min-w-0 w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 ${props.paddingClass ?? "py-1"} items-center gap-1.5 rounded-md text-left cursor-pointer hover:bg-surface-muted/60 transition-colors ${props.class ?? ""}`}
     >
       <Show when={!props.hideChevron}>
         <span class="inline-flex w-3.5 shrink-0 items-center justify-center">
@@ -56,6 +56,11 @@ export function DisclosureBody(props: { open: boolean; keepMounted?: boolean; cl
     else if (props.keepMounted === false) setVisited(false);
   });
   return <Show when={props.open || (props.keepMounted !== false && visited())}>
-    <div class={props.class} style={{ display: props.open ? undefined : "none" }}><DisclosureActive.Provider value={() => props.open && parentActive()}>{props.children}</DisclosureActive.Provider></div>
+    <div
+      class={`w-full min-w-0 ${props.class ?? ""}`}
+      style={{ display: props.open ? undefined : "none", "overflow-anchor": "none" }}
+    >
+      <DisclosureActive.Provider value={() => props.open && parentActive()}>{props.children}</DisclosureActive.Provider>
+    </div>
   </Show>;
 }

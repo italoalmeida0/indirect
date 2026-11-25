@@ -63,6 +63,7 @@ import { createWorkspace } from "./hooks/useWorkspace";
 import { createHosts } from "./hooks/useHosts";
 import { createSettings } from "./hooks/useSettings";
 import { createSessionAttention, type LiveSessionAttentionOverlay } from "./hooks/useSessionAttention";
+import { createActivePresence } from "./utils/activePresence";
 import { normalizeAttentionKind } from "./store/sessions";
 import { baseMode, effectiveModeSkills } from "./utils/modeSkills";
 import { createVoiceController } from "./voice/useVoice";
@@ -594,6 +595,8 @@ export default function IndirectCodePage() {
     return Boolean(aid && hosts.hosts().find((h) => h.id === aid)?.status === "updating");
   };
 
+  const activePresence = createActivePresence();
+
   const sessionAttention = createSessionAttention({
     send: (payload) => relay.send(payload),
     wsOpen,
@@ -611,6 +614,7 @@ export default function IndirectCodePage() {
     sessions: () => mirror.sessions(),
     sessionsForHost: (hid) => mirror.sessionsForHost(hid),
     liveSessionAttention,
+    activePresence,
   });
 
   // Sync newly discovered online background hosts so cross-host unread badges stay current.
@@ -663,14 +667,26 @@ export default function IndirectCodePage() {
 
   // Turn-end notifications (Camada A: tab open). Fed BEFORE the
   // active-host filter below so turns on any host/session notify.
+  const isSessionViewBlocked = () =>
+    draftMode() ||
+    historyView() ||
+    isActiveHostUpdating() ||
+    (overlaySidebar() && sidebarOpen());
+
   const turnNotify = createTurnNotify({
     hosts: () => hosts.hosts(),
     sessions: () => mirror.sessions(),
     sessionsForHost: (hid) => mirror.sessionsForHost(hid),
     toast: notice.toast,
     activeHostId: () => hosts.activeHostId(),
-    activeSessionId: () => (historyView() ? "" : activeSessionId()),
-    isViewportActive: sessionAttention.isViewportActive,
+    activeSessionId: () => (isSessionViewBlocked() ? "" : activeSessionId()),
+    activePresence,
+    isActivelyViewingSession: (hostId, sessionId) =>
+      activePresence.isActivelyViewingSession(hostId, sessionId, {
+        activeHostId: () => hosts.activeHostId(),
+        activeSessionId,
+        isViewBlocked: isSessionViewBlocked,
+      }),
     onOpenSession: (hostId, sessionId) => {
       try { window.focus(); } catch {}
       if (hostId !== hosts.activeHostId()) hosts.setActiveHostId(hostId);
@@ -959,6 +975,7 @@ export default function IndirectCodePage() {
   // No session is ever a dead end: typing + Enter auto-starts a
   // conversation inside the active project, then the text is delivered.
   function beginConversationWith() {
+    activePresence.noteActivity();
     // Talk sessions have no project: they are born in the default Home
     // project (empty cwd — the daemon falls back to the home directory).
     const talk = options.pendingMode() === "talk";
@@ -2039,6 +2056,7 @@ export default function IndirectCodePage() {
   const composerValue: ComposerCtxValue = {
     ...composer,
     sendPrompt: () => {
+      activePresence.noteActivity();
       voice.clearReveal();
       return composer.sendPrompt();
     },

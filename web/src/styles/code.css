@@ -102,6 +102,106 @@ html[data-theme="light"] [data-streamdown="inline-code"] {
   min-width: 0; max-width: 100%; max-height: 400px;
   overflow-y: auto; overflow-wrap: anywhere;
 }
+
+/* Transcript viewport: reserve the desktop scrollbar gutter so centered lanes
+ * never shift horizontally when overflow toggles or tools open/close.
+ * Desktop (>=640px) reserves symmetrical gutters on both edges so the centered
+ * conversation lane stays dead-center and aligned with the composer below;
+ * narrow non-mobile viewports reserve the right rail only; touch devices hide
+ * scrollbars completely (0px gutter). */
+.rc-transcript-scroll {
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+}
+@media (min-width: 640px) {
+  .rc-transcript-scroll {
+    scrollbar-gutter: stable both-edges;
+  }
+}
+html.mobile .rc-transcript-scroll {
+  scrollbar-gutter: auto;
+}
+
+.rc-turn-section {
+  overflow-anchor: none;
+}
+
+/* Sticky user prompt header: zero-height sticky slot keeps scroll geometry
+ * invariant (zero scroll jump or layout feedback loop) while pinning the active
+ * turn's initiating prompt at the top of the conversation lane. */
+.rc-sticky-prompt-anchor {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.rc-sticky-prompt-shell {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+  background: linear-gradient(
+    to bottom,
+    var(--background) 0%,
+    var(--background) 55%,
+    color-mix(in oklab, var(--background) 82%, transparent) 80%,
+    transparent 100%
+  );
+  will-change: transform;
+}
+@keyframes rc-sticky-prompt-enter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.rc-sticky-prompt-btn {
+  background: color-mix(in oklab, var(--surface) 92%, var(--background));
+  border: 1px solid color-mix(in oklab, var(--border) 94%, transparent);
+  box-shadow: var(--shadow-resting);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  animation: rc-sticky-prompt-enter 0.14s var(--ease-enter) backwards;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+html:not(.mobile) .rc-sticky-prompt-btn:hover,
+html.mobile .rc-sticky-prompt-btn:active {
+  background: color-mix(in oklab, var(--surface-subtle) 97%, var(--background));
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-raised);
+}
+:root[data-theme="dark"] .rc-sticky-prompt-btn {
+  background: color-mix(in oklab, var(--surface-raised) 88%, var(--background));
+  border-color: color-mix(in oklab, var(--border-strong) 68%, var(--border));
+}
+html:not(.mobile):root[data-theme="dark"] .rc-sticky-prompt-btn:hover,
+html.mobile:root[data-theme="dark"] .rc-sticky-prompt-btn:active {
+  background: color-mix(in oklab, var(--surface-muted) 92%, var(--background));
+  border-color: var(--border-strong);
+}
+:root[data-theme="high-contrast"] .rc-sticky-prompt-btn {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rc-sticky-prompt-btn {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+:root[data-reduced-motion="reduce"] .rc-sticky-prompt-btn {
+  animation: none !important;
+  transition: none !important;
+}
 .rc-markdown pre {
   margin: 0 0 0.65rem; padding: 0.75rem 0.9rem; border-radius: 0.65rem;
   background: var(--surface-subtle);

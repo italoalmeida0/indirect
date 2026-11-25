@@ -10,7 +10,7 @@ interface RenderApprovalOpts {
   approval: PendingApproval | null;
   convWidthClass?: string;
   accessMode?: AccessMode;
-  jobs?: Array<{ id: string; label?: string; status: string }>;
+  jobs?: Array<{ id: string; kind?: string; label?: string; command?: string; status: string }>;
 }
 
 function assertWhisperQuietApprovalHtml(html: string) {
@@ -630,6 +630,88 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(skillPreview).toContain('data-rc-tip="use_skill"');
     expect(skillPreview).toContain(">Load skill<");
     expect(skillPreview).toContain("generative_ui_agentic");
+  });
+
+  test("bg_await and bg_cancel resolve linked task summary + compact command preview, and never put stdin/command/query payloads in data-rc-tip", () => {
+    const longWorkDir = "/workspace/very-long-directory-path/packages/indirect-code-daemon/cmd/daemon";
+    const longStdin = "secret-or-large-stdin-payload-".repeat(4);
+    const jsTipHtml = renderApprovalCardSsr({
+      approval: {
+        callId: "call-js-tips",
+        tool: "exec_script",
+        args: JSON.stringify({
+          code: "console.log('hi');",
+          summary: "Stdin processing check",
+          work_dir: longWorkDir,
+          stdin: longStdin,
+        }),
+      },
+    });
+    assertWhisperQuietApprovalHtml(jsTipHtml);
+    expect(jsTipHtml).toContain(`data-rc-tip="${longWorkDir}"`);
+    expect(jsTipHtml).not.toContain(`data-rc-tip="${longStdin}"`);
+
+    // Non-path fallback target (long query) must not emit data-rc-tip
+    const longQuery = "how to configure zig cross compilation toolchain for static musl binaries in ci";
+    const searchHtml = renderApprovalCardSsr({
+      approval: {
+        callId: "call-search-tips",
+        tool: "search_web",
+        args: JSON.stringify({ query: longQuery }),
+      },
+    });
+    assertWhisperQuietApprovalHtml(searchHtml);
+    expect(searchHtml).not.toContain(`data-rc-tip="${longQuery}"`);
+
+    // bg_await resolves linked job from waiting_for and renders human summary + compact command preview
+    const awaitLinkedHtml = renderApprovalCardSsr({
+      jobs: [
+        {
+          id: "bg_dev",
+          kind: "bash",
+          label: "Dev server startup",
+          command: "bun run dev --port 3000",
+          status: "running",
+        },
+      ],
+      approval: {
+        callId: "call-await-linked",
+        tool: "bg_await",
+        args: JSON.stringify({
+          max_wait_seconds: 90,
+          waiting_for: "bg_dev",
+          summary: "Waiting for server ready",
+        }),
+      },
+    });
+    assertWhisperQuietApprovalHtml(awaitLinkedHtml);
+    expect(awaitLinkedHtml).toContain("data-approval-bg-task");
+    expect(awaitLinkedHtml).toContain("Dev server startup");
+    expect(awaitLinkedHtml).toContain("bun run dev --port 3000");
+    expect(awaitLinkedHtml).not.toContain('data-rc-tip="bun run dev --port 3000"');
+
+    // bg_cancel resolves linked job human summary (sans-serif font-medium) + compact command preview
+    const cancelLinkedHtml = renderApprovalCardSsr({
+      jobs: [
+        {
+          id: "bg_js",
+          kind: "exec_script",
+          label: "Dataset transform",
+          command: "console.log(transform(rows))",
+          status: "running",
+        },
+      ],
+      approval: {
+        callId: "call-cancel-linked",
+        tool: "bg_cancel",
+        args: JSON.stringify({ job_id: "bg_js" }),
+      },
+    });
+    assertWhisperQuietApprovalHtml(cancelLinkedHtml);
+    expect(cancelLinkedHtml).toContain("Dataset transform");
+    expect(cancelLinkedHtml).toContain("data-approval-bg-command");
+    expect(cancelLinkedHtml).toContain("console.log(transform(rows))");
+    expect(cancelLinkedHtml).not.toContain('data-rc-tip="console.log(transform(rows))"');
   });
 });
 

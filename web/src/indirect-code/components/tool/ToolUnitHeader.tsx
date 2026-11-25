@@ -3,6 +3,7 @@ import { Icon as Iconify } from "../../../components/icon";
 import { press } from "../../../ds/motion/press";
 import { createShimmerStyle } from "../../../ds/motion/shimmer";
 import { absoluteRemotePath, collapseCwd } from "../../paths";
+import { bgJobSummary, conciseBgSummary, decapitalizeToolTarget } from "../../transcript";
 import { latestExploreProgress } from "../../utils/contextTools";
 import { ShellCmd } from "../CodeBlock";
 import { FileIcon } from "../../presentation";
@@ -22,15 +23,38 @@ export function ToolUnitHeader(props: ToolPartProps) {
     return "";
   };
 
+  const isBgRefTool = () => {
+    const n = props.m.name();
+    return n === "bg_check" || n === "bg_tail" || n === "bg_cancel";
+  };
+
+  const bgLinkedJob = () => {
+    if (!isBgRefTool()) return undefined;
+    const a = props.m.args();
+    const details = props.u.result?.toolDetails as any;
+    const jobId = String(a.job_id || a.id || details?.background_job_id || "").trim();
+    if (!jobId) return undefined;
+    return props.ctx.backgroundJobs?.().find((j) => j.id === jobId);
+  };
+
+  const bgExplicitSummary = () => {
+    if (!isBgRefTool()) return "";
+    const env = props.m.mergedEnv();
+    const details = props.u.result?.toolDetails as any;
+    return conciseBgSummary(env?.summary ?? details?.summary);
+  };
+
+  const bgResolvedSummary = () => bgExplicitSummary() || bgJobSummary(bgLinkedJob());
+
   const isMonoIdentifier = () => {
     const n = props.m.name();
+    if (n === "bg_tail") return !bgResolvedSummary();
     return (
       n === "use_skill" ||
       n === "widget_set" ||
       n === "widget_edit" ||
       n === "widget_read" ||
-      n === "widget_lint" ||
-      n === "bg_tail"
+      n === "widget_lint"
     );
   };
 
@@ -42,20 +66,53 @@ export function ToolUnitHeader(props: ToolPartProps) {
     return n === "bash" || n === "exec_script" || n === "python";
   };
 
-  const commandTooltip = () => {
-    if (!isCommandTool() || !props.m.taskSummary()) return undefined;
-    const raw = collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "").replace(/\s+/g, " ").trim();
-    if (!raw) return undefined;
-    const prompt = props.m.name() === "exec_script" || props.m.name() === "python" ? "> " : "$ ";
-    const clipped = raw.length > 140 ? raw.slice(0, 140) + "…" : raw;
-    return `${prompt}${clipped}`;
+  const rowIcon = () => {
+    const baseIcon = props.m.sum().icon;
+    if (isBgRefTool() && baseIcon === "lucide:terminal") {
+      const kind = bgLinkedJob()?.kind;
+      if (kind === "exec_script") return "mdi:language-javascript";
+      if (kind === "python") return "mdi:language-python";
+    }
+    return baseIcon;
+  };
+
+  const rowTarget = () => {
+    const n = props.m.name();
+    if (n === "bg_await") {
+      const raw = props.m.sleepLabel();
+      const sep = raw.indexOf(" · ");
+      if (sep >= 0) {
+        return `${raw.slice(0, sep + 3)}${decapitalizeToolTarget(raw.slice(sep + 3))}`;
+      }
+      return decapitalizeToolTarget(raw);
+    }
+    const base = props.m.sum().target;
+    if (isBgRefTool()) {
+      let resolved = base;
+      if (!bgExplicitSummary()) {
+        const fallbackSummary = bgJobSummary(bgLinkedJob());
+        if (fallbackSummary) {
+          if (n === "bg_cancel") {
+            resolved = fallbackSummary;
+          } else {
+            const hashIdx = base.indexOf("#L");
+            resolved = hashIdx >= 0 ? `${fallbackSummary}${base.slice(hashIdx)}` : fallbackSummary;
+          }
+        }
+      }
+      return decapitalizeToolTarget(resolved);
+    }
+    if ((isCommandTool() && Boolean(props.m.taskSummary())) || n === "bg_list" || n === "explore") {
+      return decapitalizeToolTarget(base);
+    }
+    return base;
   };
 
   const rowChildren = () => (
     <>
       <span class="inline-flex w-3.5 shrink-0 items-center justify-center">
         <Iconify
-          icon={props.m.sum().icon}
+          icon={rowIcon()}
           size={13}
           class="shrink-0 text-fg-muted group-hover/tool:text-fg-secondary transition-colors"
         />
@@ -71,12 +128,12 @@ export function ToolUnitHeader(props: ToolPartProps) {
                   props.ctx.activeSession()?.cwd || "",
                   props.ctx.projects().find((p: { protected?: boolean }) => p.protected)?.path,
                 )
-              : commandTooltip()
+              : undefined
           }
         >
           <Show when={targetPath()}><FileIcon path={targetPath()} size={13} /></Show>
           <Show when={isCommandTool() && !props.m.taskSummary()} fallback={
-            <span class={`truncate text-fg-secondary group-hover/tool:text-fg min-w-0 transition-colors ${isMonoIdentifier() ? "font-mono text-xs" : ""}`}>{props.m.name() === "bg_await" ? props.m.sleepLabel() : props.m.sum().target}</span>
+            <span class={`truncate text-fg-secondary group-hover/tool:text-fg min-w-0 transition-colors ${isMonoIdentifier() ? "font-mono text-xs" : ""}`}>{rowTarget()}</span>
           }>
             <span class="truncate text-fg-secondary group-hover/tool:text-fg min-w-0 text-xs transition-colors"><ShellCmd prompt={props.m.name() === "exec_script" || props.m.name() === "python" ? "> " : "$ "} text={collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "")} /></span>
           </Show>

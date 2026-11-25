@@ -2,6 +2,7 @@ import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { DaemonCommand } from "../daemon-protocol";
 import { normalizeAttentionKind, type SessionAttentionKind } from "../store/sessions";
 import type { SessionSummary } from "../types";
+import { createActivePresence, type ActivePresence } from "../utils/activePresence";
 
 export interface LiveSessionAttentionOverlay {
   hostId: string;
@@ -28,6 +29,8 @@ export interface SessionAttentionOpts {
   sessions: () => SessionSummary[];
   sessionsForHost: (hostId: string) => SessionSummary[];
   liveSessionAttention?: () => LiveSessionAttentionOverlay | null;
+  /** Optional shared presence tracker to avoid duplicating focus/visibility listeners. */
+  activePresence?: ActivePresence;
 }
 
 export function sessionAttentionLabel(kind?: SessionAttentionKind): string {
@@ -45,56 +48,19 @@ export function sessionAttentionLabel(kind?: SessionAttentionKind): string {
   }
 }
 
-function computeViewportActive(): boolean {
-  if (typeof document === "undefined") return true;
-  const visible = (document.visibilityState ?? "visible") === "visible";
-  if (!visible) return false;
-  if (typeof document.hasFocus === "function") {
-    return document.hasFocus();
-  }
-  return true;
-}
-
 function sessionAttentionKey(hostId: string, sessionId: string): string {
   return `${hostId}:${sessionId}`;
 }
 
 export function createSessionAttention(opts: SessionAttentionOpts) {
   const [optimisticSeen, setOptimisticSeen] = createSignal<Record<string, number>>({});
-  const [isViewportActive, setViewportActive] = createSignal<boolean>(computeViewportActive());
-
-  if (typeof document !== "undefined" && typeof window !== "undefined") {
-    const onVisibilityChange = () => {
-      setViewportActive(computeViewportActive());
-    };
-    const onWindowFocus = () => {
-      if ((document.visibilityState ?? "visible") === "visible") {
-        setViewportActive(true);
-      }
-    };
-    const onWindowBlur = () => {
-      setViewportActive(false);
-    };
-    const onUserInteract = () => {
-      if ((document.visibilityState ?? "visible") === "visible") {
-        setViewportActive(true);
-      }
-    };
-
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    window.addEventListener("focus", onWindowFocus);
-    window.addEventListener("blur", onWindowBlur);
-    window.addEventListener("pointerdown", onUserInteract, { capture: true, passive: true });
-    window.addEventListener("keydown", onUserInteract, { capture: true, passive: true });
-
-    onCleanup(() => {
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-      window.removeEventListener("focus", onWindowFocus);
-      window.removeEventListener("blur", onWindowBlur);
-      window.removeEventListener("pointerdown", onUserInteract, { capture: true } as EventListenerOptions);
-      window.removeEventListener("keydown", onUserInteract, { capture: true } as EventListenerOptions);
-    });
-  }
+  const ownedPresence =
+    opts.activePresence || typeof document === "undefined" ? null : createActivePresence();
+  const isViewportActive: () => boolean = opts.activePresence
+    ? opts.activePresence.isViewportActive
+    : ownedPresence
+      ? ownedPresence.isViewportActive
+      : () => true;
 
   function overlayFor(hostId: string, sessionId: string): LiveSessionAttentionOverlay | null {
     const live = opts.liveSessionAttention?.();

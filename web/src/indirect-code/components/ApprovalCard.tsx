@@ -5,6 +5,7 @@ import { hasFileIcon } from "../files";
 import { FileIcon } from "../presentation";
 import { extractTodoItems, tryParseArgs } from "../utils/tools";
 import { formatDurationSecs } from "../utils/format";
+import { bgJobSummary } from "../transcript";
 import { useBackground } from "../ctx";
 import type {
   AccessMode,
@@ -133,7 +134,8 @@ function hasUnshownArgs(
 }
 
 function tipIfLong(text: string, min = 48): string | undefined {
-  return text.length > min ? text : undefined;
+  if (!text || text.length <= min || /[\r\n]/.test(text)) return undefined;
+  return text;
 }
 
 function capabilityBadgeMeta(
@@ -239,6 +241,41 @@ export function ApprovalCard(props: ApprovalCardProps) {
           "todowrite",
         ].includes(name);
         const fallbackTarget = !isDedicatedTool ? resolveFallbackTarget(rawArgs) : "";
+        const fallbackTargetIsPath = Boolean(
+          fallbackTarget && scalarText(rawArgs.path) === fallbackTarget,
+        );
+        const awaitJob = () => {
+          const id = scalarText(rawArgs.waiting_for);
+          return id ? jobs().find((j) => j.id === id) : undefined;
+        };
+        const awaitJobLabel = () => {
+          const job = awaitJob();
+          if (!job) return "";
+          return bgJobSummary(job) || scalarText(job.label);
+        };
+        const awaitJobCmd = () => {
+          const job = awaitJob();
+          if (!job) return "";
+          const cmd = scalarText(job.command);
+          const lbl = scalarText(job.label);
+          return cmd && cmd !== lbl ? cmd : "";
+        };
+        const cancelJob = () => {
+          const id = scalarText(rawArgs.job_id);
+          return id ? jobs().find((j) => j.id === id) : undefined;
+        };
+        const cancelJobLabel = () => {
+          const job = cancelJob();
+          if (!job) return "";
+          return bgJobSummary(job) || scalarText(job.label);
+        };
+        const cancelJobCmd = () => {
+          const job = cancelJob();
+          if (!job) return "";
+          const cmd = scalarText(job.command);
+          const lbl = scalarText(job.label);
+          return cmd && cmd !== lbl ? cmd : "";
+        };
         const toolLabel = displayToolName(name);
         const isMappedToolName = Boolean(TOOL_DISPLAY_NAMES[name]);
         const showRawArgs = hasUnshownArgs(name, rawArgs, pa.args, fallbackTarget);
@@ -479,10 +516,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                         </span>
                       </Show>
                       <Show when={rawArgs.stdin}>
-                        <span
-                          class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-fg-secondary max-w-full truncate"
-                          data-rc-tip={tipIfLong(String(rawArgs.stdin))}
-                        >
+                        <span class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-fg-secondary max-w-full truncate">
                           <span class="text-fg-muted">stdin</span>
                           <span class="truncate">{String(rawArgs.stdin)}</span>
                         </span>
@@ -506,23 +540,66 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       </span>
                     </Show>
                     <span class="text-2xs text-fg-muted truncate min-w-0">
-                      {awaitSummary || "Ends early when a background task finishes"}
+                      {awaitSummary || awaitJobLabel() || "Ends early when a background task finishes"}
                     </span>
                   </div>
+                  <Show
+                    when={
+                      awaitJobLabel() &&
+                      (awaitJobLabel().toLowerCase() !== awaitSummary.toLowerCase() || Boolean(awaitJobCmd()))
+                    }
+                  >
+                    <div
+                      data-approval-bg-task
+                      class="rounded-lg border border-border bg-surface-subtle px-2.5 py-1.5 flex items-center gap-2 min-w-0"
+                    >
+                      <Iconify
+                        icon={
+                          awaitJob()?.kind === "exec_script"
+                            ? "mdi:language-javascript"
+                            : awaitJob()?.kind === "python"
+                              ? "mdi:language-python"
+                              : "lucide:terminal"
+                        }
+                        size={13}
+                        class="text-fg-muted shrink-0"
+                      />
+                      <span
+                        class={`${awaitJobCmd() ? "font-medium" : "font-mono"} text-fg truncate ${awaitJobCmd() ? "shrink-0 max-w-[55%]" : "min-w-0 flex-1"}`}
+                      >
+                        {awaitJobLabel()}
+                      </span>
+                      <Show when={awaitJobCmd()}>
+                        <span class="font-mono text-2xs text-fg-muted truncate min-w-0 flex-1">
+                          <span class="select-none opacity-75">
+                            {awaitJob()?.kind === "exec_script" || awaitJob()?.kind === "python" ? "> " : "$ "}
+                          </span>
+                          {awaitJobCmd().replace(/\s+/g, " ")}
+                        </span>
+                      </Show>
+                    </div>
+                  </Show>
                 </Show>
 
                 <Show when={name === "bg_cancel"}>
                   <div class="flex items-center gap-2 min-w-0">
                     <Iconify icon="lucide:octagon-x" size={14} class="text-danger shrink-0" />
                     <span class="text-fg-muted shrink-0">Stop background task</span>
-                    <span class="font-mono text-fg truncate min-w-0">
-                      {(() => {
-                        const id = String(rawArgs.job_id || "");
-                        const job = jobs().find((j) => j.id === id);
-                        return job?.label || id || "unknown";
-                      })()}
+                    <span class={`${cancelJobCmd() ? "font-medium" : "font-mono"} text-fg truncate min-w-0`}>
+                      {cancelJobLabel() || scalarText(rawArgs.job_id) || "unknown"}
                     </span>
                   </div>
+                  <Show when={cancelJobCmd()}>
+                    <div
+                      data-approval-bg-command
+                      class="rounded-lg border border-border bg-surface-subtle px-2.5 py-1.5 font-mono text-2xs text-fg-secondary truncate"
+                    >
+                      <span class="text-fg-muted select-none">
+                        {cancelJob()?.kind === "exec_script" || cancelJob()?.kind === "python" ? "> " : "$ "}
+                      </span>
+                      {cancelJobCmd().replace(/\s+/g, " ")}
+                    </div>
+                  </Show>
                 </Show>
 
                 <Show when={name === "read"}>
@@ -760,7 +837,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                     <Show when={fallbackTarget}>
                       <span
                         class="font-mono text-fg-secondary truncate min-w-0"
-                        data-rc-tip={tipIfLong(fallbackTarget)}
+                        data-rc-tip={fallbackTargetIsPath ? tipIfLong(fallbackTarget) : undefined}
                       >
                         {fallbackTarget}
                       </span>

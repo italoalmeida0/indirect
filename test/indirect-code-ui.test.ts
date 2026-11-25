@@ -1951,11 +1951,23 @@ describe("Background tasks (bash/exec_script detach)", () => {
     expect(toolSummary({
       call: { type: "tool_call", toolId: "t", toolName: "bg_cancel", toolArgs: JSON.stringify({ job_id: "bg_js" }) },
       result: { type: "tool_result", toolId: "t", toolResult: "Background Task (exec_script) — cancelled", toolDetails: { env: { kind: "exec_script" } } },
-    } as any)).toMatchObject({ icon: "mdi:language-javascript", verb: "Canceled", target: "Script Background Task" });
+    } as any)).toMatchObject({ icon: "mdi:language-javascript", verb: "Canceled", target: "Script background task" });
     expect(toolSummary({
       call: { type: "tool_call", toolId: "t", toolName: "bg_check", toolArgs: JSON.stringify({ job_id: "bg_js" }) },
       result: { type: "tool_result", toolId: "t", toolResult: "1:hello", toolDetails: { env: { kind: "exec_script", page: "1-1/1" } } },
-    } as any)).toMatchObject({ icon: "mdi:language-javascript", verb: "Read", target: "Background Task#L1-1" });
+    } as any)).toMatchObject({ icon: "mdi:language-javascript", verb: "Read", target: "Background task#L1-1" });
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "bg_check", toolArgs: JSON.stringify({ job_id: "bg_js" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "1:hello", toolDetails: { env: { kind: "exec_script", summary: "Dataset transform", page: "1-5/5" } } },
+    } as any)).toMatchObject({ icon: "mdi:language-javascript", verb: "Read", target: "Dataset transform#L1-5" });
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "bg_cancel", toolArgs: JSON.stringify({ job_id: "bg_js" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "", toolDetails: { env: { kind: "exec_script", summary: "Dataset transform", cancelled: "true" } } },
+    } as any)).toMatchObject({ icon: "mdi:language-javascript", verb: "Canceled", target: "Dataset transform" });
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "bg_tail", toolArgs: JSON.stringify({ job_id: "bg_js" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "1:ok", toolDetails: { env: { kind: "bash", summary: "Dev server startup", page: "1-10/10", status: "running" } } },
+    } as any)).toMatchObject({ icon: "lucide:terminal", verb: "Tailed", target: "Dev server startup#L1-10", stat: "running" });
     expect(specialTitle([
       { call: { type: "tool_call", toolId: "1", toolName: "bash" } },
       { call: { type: "tool_call", toolId: "2", toolName: "exec_script" } },

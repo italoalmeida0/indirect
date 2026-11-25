@@ -25,6 +25,8 @@ type BgCancelOutcome struct {
 	Status string
 	// Kind is the background task kind ("bash", "exec_script").
 	Kind string
+	// Label is the background task's human summary (when available).
+	Label string
 	// Notice is the model-facing text.
 	Notice string
 }
@@ -71,23 +73,30 @@ func (t *BgCancelTool) Execute(ctx context.Context, raw json.RawMessage, _ func(
 		return core.ToolResult{}, err
 	}
 	attrs := []core.Attr{
-		{Key: "job_id", Value: strings.TrimSpace(a.JobID)},
+		{Key: "job_id", Value: jobID},
 		{Key: "cancelled", Value: fmt.Sprintf("%t", out.OK)},
 		{Key: "status", Value: out.Status},
 	}
 	if out.Kind != "" {
 		attrs = append(attrs, core.Attr{Key: "kind", Value: out.Kind})
 	}
+	summary := strings.TrimSpace(out.Label)
+	if summary != "" {
+		attrs = append(attrs, core.Attr{Key: "summary", Value: summary})
+	}
 	if out.Notice != "" {
 		attrs = append(attrs, core.Attr{Key: "info", Value: out.Notice})
 	}
 	details := map[string]any{
-		"background_job_id": a.JobID,
+		"background_job_id": jobID,
 		"cancelled":         out.OK,
 		"status":            out.Status,
 	}
 	if out.Kind != "" {
 		details["kind"] = out.Kind
+	}
+	if summary != "" {
+		details["summary"] = summary
 	}
 	return core.ToolResult{
 		Content: nil,

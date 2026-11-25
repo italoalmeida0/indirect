@@ -234,10 +234,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                     <Show
                       when={hasDistinctCommand(job)}
                       fallback={
-                        <span
-                          class="truncate text-fg min-w-0 flex-1 text-xs"
-                          data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
-                        >
+                        <span class="truncate text-fg min-w-0 flex-1 text-xs">
                           <ShellCmd
                             prompt={commandPrompt(job.kind)}
                             text={shortLabel(job.label || job.id)}
@@ -249,14 +246,12 @@ export function BackgroundCard(props: { contextKey?: string }) {
                         <span
                           class="truncate font-medium text-fg text-xs shrink-0 sm:max-w-[52%]"
                           data-bg-label
-                          data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
                         >
                           {shortLabel(job.label || job.id)}
                         </span>
                         <span
                           class="truncate font-mono text-2xs text-fg-muted min-w-0 flex-1"
                           data-bg-command-preview
-                          data-rc-tip={job.command && job.command.length > 56 ? job.command : undefined}
                         >
                           <span class="select-none opacity-75">{commandPrompt(job.kind)}</span>
                           {shortLabel(job.command || "", 56)}

@@ -158,3 +158,37 @@ func TestBgSummaryLabelPreservesCommandAndDedupesByCommand(t *testing.T) {
 		t.Fatalf("unexpected bgTaskPayloads: %#v", payloads)
 	}
 }
+
+func TestBgSupervisorCancelJobPopulatesLabelSummary(t *testing.T) {
+	b := testBG(t)
+	reply := make(chan any, 1)
+	b.inbox <- Envelope{Payload: bgRegisterMsg{
+		Kind:      "bash",
+		SessionID: "s1",
+		Label:     "Dev server startup",
+		Command:   "bun run dev --port 3000",
+		StartedAt: 1000,
+		Reply:     reply,
+	}}
+	reg := (<-reply).(bgRegisterResult)
+	if reg.Error != "" || reg.JobID == "" {
+		t.Fatalf("unexpected register result: %#v", reg)
+	}
+
+	out, err := b.cancelJob("s1", reg.JobID)
+	if err != nil {
+		t.Fatalf("cancelJob failed: %v", err)
+	}
+	if !out.OK || out.Status != BgStatusCancelled || out.Kind != "bash" || out.Label != "Dev server startup" {
+		t.Fatalf("unexpected cancel outcome: %+v", out)
+	}
+
+	// Second cancel on already-terminal job still returns the task's summary label.
+	again, err := b.cancelJob("s1", reg.JobID)
+	if err != nil {
+		t.Fatalf("second cancelJob failed: %v", err)
+	}
+	if again.OK || again.Status != BgStatusCancelled || again.Label != "Dev server startup" {
+		t.Fatalf("unexpected terminal cancel outcome: %+v", again)
+	}
+}

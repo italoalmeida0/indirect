@@ -8,8 +8,8 @@ import { extractTodoItems, resolveWidgetId } from "./utils/tools";
 /** bg_cancel/bg_check kind: exec_script vs terminal. The daemon includes the
  * kind in the result header ("Background Task (exec_script) — …"); fall back
  * to the job registry via toolDetails when present. */
-function bgTaskKind(args: any, res: string, env?: Record<string, string>): "bash" | "exec_script" | "python" {
-  const k = String(env?.kind || "").toLowerCase();
+function bgTaskKind(args: any, res: string, env?: Record<string, string>, details?: any): "bash" | "exec_script" | "python" {
+  const k = String(env?.kind || details?.kind || "").toLowerCase();
   if (k === "exec_script" || k === "python" || k === "bash") return k;
   const m = /Background Task \((bash|exec_script|python)\)/.exec(res || "");
   if (m) return m[1] as "bash" | "exec_script" | "python";
@@ -17,11 +17,11 @@ function bgTaskKind(args: any, res: string, env?: Record<string, string>): "bash
   if (ak === "exec_script" || ak === "python") return ak;
   return "bash";
 }
-function bgCancelKind(args: any, res: string, env?: Record<string, string>): string {
-  return bgTaskKind(args, res, env);
+function bgCancelKind(args: any, res: string, env?: Record<string, string>, details?: any): string {
+  return bgTaskKind(args, res, env, details);
 }
-function bgCheckKind(args: any, res: string, env?: Record<string, string>): string {
-  return bgTaskKind(args, res, env);
+function bgCheckKind(args: any, res: string, env?: Record<string, string>, details?: any): string {
+  return bgTaskKind(args, res, env, details);
 }
 /** Extracts the "LX-Y" range from a bg_check result (envelope page attr,
  * legacy header "Lines X–Y of N") for the row target. */
@@ -497,6 +497,53 @@ function shortBgJobId(raw: string): string {
   return `${id.slice(0, 8)}…${id.slice(-6)}`;
 }
 
+/**
+ * Lowercase the leading sentence-capitalized word of an AI-authored summary
+ * when it renders directly after a verb prefix in a tool row (e.g. "Ran" +
+ * "Check status something" -> "Ran check status something"), while preserving
+ * acronyms ("API", "E2E", "CI"), PascalCase/product names ("TypeScript",
+ * "GitHub", "SQLite"), drive/file paths, code identifiers ("Foo.bar",
+ * "Foo_bar"), and standalone "I".
+ */
+export function decapitalizeToolTarget(text: string): string {
+  if (!text) return text;
+  // Isolate the leading word token (up to whitespace or #L range suffix).
+  const firstToken = text.split(/[\s#]/, 1)[0] ?? "";
+  if (firstToken.length < 2) return text;
+  if (!/^\p{Lu}\p{Ll}/u.test(firstToken)) return text;
+  if (/\p{Lu}/u.test(firstToken.slice(1))) return text;
+  if (/[._/\\(:]/.test(firstToken)) return text;
+  return text[0]!.toLowerCase() + text.slice(1);
+}
+
+/** Returns a concise single-line human summary for background task headers and
+ * bodies, rejecting multiline or overly long raw command/script payloads. */
+export function conciseBgSummary(raw: unknown, maxLen = 90): string {
+  if (typeof raw !== "string") return "";
+  if (/[\r\n]/.test(raw)) return "";
+  const clean = raw.replace(/\s+/g, " ").trim();
+  if (!clean || clean.length > 120) return "";
+  return clean.length > maxLen ? clean.slice(0, maxLen) + "…" : clean;
+}
+
+/** Resolves a concise human summary from a session background job record.
+ * Jobs with a distinct command preview surface their summary label; legacy jobs
+ * (where label == command) only surface concise single-line labels (<=64 chars). */
+export function bgJobSummary(
+  job?: { label?: string; command?: string } | null,
+  maxLen = 80,
+): string {
+  if (!job || typeof job.label !== "string") return "";
+  if (/[\r\n]/.test(job.label)) return "";
+  const label = job.label.replace(/\s+/g, " ").trim();
+  if (!label) return "";
+  const cmd = typeof job.command === "string" ? job.command.replace(/\s+/g, " ").trim() : "";
+  if (cmd && label !== cmd) {
+    return conciseBgSummary(label, maxLen);
+  }
+  return label.length <= 64 ? label : "";
+}
+
 function countBgListJobs(res: string, details: any): number | null {
   if (Array.isArray(details?.jobs)) return details.jobs.length;
   if (Array.isArray(details?.tasks)) return details.tasks.length;
@@ -955,38 +1002,45 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       };
     }
     case "bg_cancel": {
-      // Clean UI: never show the id. "Canceled <kind> Background Task".
-      const env = details?.env;
-      const kind = bgCancelKind(args, res, env);
+      // Prefer the task's concise human summary; fall back to "<kind> background task".
+      const { cleanRes, mergedDetails } = unwrapToolSummaryInput(res, details);
+      const env = mergedDetails?.env;
+      const kind = bgCancelKind(args, cleanRes, env, mergedDetails);
+      const summary = conciseBgSummary(env?.summary ?? mergedDetails?.summary);
       const isErr = Boolean(u.result && (u.result.isError || env?.error));
       const notCancelled = Boolean(
         u.result &&
-        (details?.cancelled === false ||
+        (mergedDetails?.cancelled === false ||
           (env && (env.cancelled === false || env.cancelled === "false")))
       );
       return {
         icon: kind === "exec_script" ? "mdi:language-javascript" : kind === "python" ? "mdi:language-python" : "lucide:terminal",
         verb: !u.result ? "Canceling" : isErr ? "Failed" : notCancelled ? "Checked" : "Canceled",
-        target: `${kind === "exec_script" || kind === "python" ? "Script" : "Terminal"} Background Task`,
+        target: summary || `${kind === "exec_script" || kind === "python" ? "Script" : "Terminal"} background task`,
       };
     }
     case "bg_check": {
-      // Reads like a file: "Background Task#Lfrom-to", kind icon.
-      const env = details?.env;
-      const kind = bgCheckKind(args, res, env);
-      const range = bgCheckRange(res, env);
+      // Reads like a file: "<Summary>#Lfrom-to" when available, else "Background task#Lfrom-to".
+      const { cleanRes, mergedDetails } = unwrapToolSummaryInput(res, details);
+      const env = mergedDetails?.env;
+      const kind = bgCheckKind(args, cleanRes, env, mergedDetails);
+      const range = bgCheckRange(cleanRes, env);
+      const summary = conciseBgSummary(env?.summary ?? mergedDetails?.summary);
+      const label = summary || "Background task";
       return {
         icon: kind === "exec_script" ? "mdi:language-javascript" : kind === "python" ? "mdi:language-python" : "lucide:terminal",
-        verb: "Read",
-        target: range ? `Background Task#${range}` : "Background Task",
+        verb: u.result ? "Read" : "Reading",
+        target: range ? `${label}#${range}` : label,
       };
     }
     case "bg_tail": {
-      const env = details?.env;
-      const kind = bgCheckKind(args, res, env);
-      const range = bgCheckRange(res, env);
-      const rawId = String(args.job_id || args.id || details?.background_job_id || "").trim();
-      const label = rawId ? shortBgJobId(rawId) : "Background Task";
+      const { cleanRes, mergedDetails } = unwrapToolSummaryInput(res, details);
+      const env = mergedDetails?.env;
+      const kind = bgCheckKind(args, cleanRes, env, mergedDetails);
+      const range = bgCheckRange(cleanRes, env);
+      const summary = conciseBgSummary(env?.summary ?? mergedDetails?.summary);
+      const rawId = String(args.job_id || args.id || mergedDetails?.background_job_id || "").trim();
+      const label = summary || (rawId ? shortBgJobId(rawId) : "Background task");
       return {
         icon: kind === "exec_script" ? "mdi:language-javascript" : kind === "python" ? "mdi:language-python" : "lucide:terminal",
         verb: u.result ? "Tailed" : "Tailing",

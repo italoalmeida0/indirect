@@ -62,9 +62,10 @@ function renderThinkingRow(
   streaming: () => boolean,
   running: () => boolean,
   suppressHeader: () => boolean = () => false,
+  allowAutomatic: () => boolean = () => true,
 ) {
   const key = `${entry.msg.id}:think:${entry.nth}`;
-  const { open, toggle } = createDisclosure(() => `${running()}:${live()}`, openByDefault, ctx.isPinned);
+  const { open, toggle } = createDisclosure(() => `${running()}:${live()}`, openByDefault, allowAutomatic);
   const shimmerStyle = createShimmerStyle(live);
   const effectiveOpen = () => (suppressHeader() ? true : open());
   const label = () =>
@@ -76,7 +77,7 @@ function renderThinkingRow(
           ? "Hide thinking"
           : "Thought";
   return (
-    <div class="w-full flex flex-col" style={hidden() ? { display: "none" } : undefined} data-thinking-row={key}>
+    <div class="w-full min-w-0 flex flex-col" style={hidden() ? { display: "none" } : undefined} data-thinking-row={key}>
       <Show when={!suppressHeader()}>
         <DisclosureTrigger
           open={open()}
@@ -104,45 +105,57 @@ function renderThinkingRow(
 
 /**
  * The turn aggregate: one card per contiguous tool execution/thinking run.
- * Open by default while the turn runs, closed once it ends — unless toggled explicitly.
+ * Open by default while it is the live active tail, auto-collapsed once finished
+ * or superseded — while preserving any post-finish manual expansion.
  * Questions stay collapsed here; the questionnaire renders separately.
  */
 function renderTurnAggregate(
   ctx: TranscriptRenderCtx,
-  series: RenderBlockSeries,
+  series: () => RenderBlockSeries,
 ) {
   // NOTE: ctx.renderBlocks() is the FULL list (sealed blocks + live
   // tail; the <For> in TranscriptView slices by seal); the running turn
   // is always the newest block, which always renders.
-  const running = createMemo(() => isBlockRunning(ctx.renderBlocks(), series, ctx.sessionStatus()));
-  const summary = createMemo(() => specialTitle(series.units, {
-    thoughts: series.entries.filter((e) => e.kind === "thinking").length,
+  const running = createMemo(() => isBlockRunning(ctx.renderBlocks(), series(), ctx.sessionStatus()));
+  const onlyThinking = createMemo(() => series().entries.every((e) => e.kind === "thinking") && series().units.length === 0);
+  const singleThinking = createMemo(() => onlyThinking() && series().entries.length === 1);
+  // Tool aggregates always auto-collapse when finished or superseded (even if
+  // the user clicked/scrolled in the transcript during the run, detaching pin).
+  // Standalone thinking-only blocks retain unpinned-reading preservation.
+  const allowAutoCollapse = () => (onlyThinking() ? (ctx.isPinned ? ctx.isPinned() : true) : true);
+  const summary = createMemo(() => specialTitle(series().units, {
+    thoughts: series().entries.filter((e) => e.kind === "thinking").length,
   }));
-  const { open, toggle } = createDisclosure(() => String(running()), running, ctx.isPinned);
-  const lastTurnId = () => series.extras.at(-1)?.id ?? series.msg.id;
+  const { open, toggle } = createDisclosure(() => String(running()), running, allowAutoCollapse);
+  const lastTurnId = () => series().extras.at(-1)?.id ?? series().msg.id;
   /** Live tail: the turn's latest call, or any call with live progress
    * (parallel in-flight). Only the tail spins/auto-opens; when a new
    * entry arrives the previous one falls back to closed on its own. */
-  const tailCall = () => [...series.units].reverse().find((u) => u.call) ?? null;
-  const isActive = (u: ToolUnit) =>
-    running() && !u.result && !!u.call?.toolId && (
+  const tailCall = () => [...series().units].reverse().find((u) => u.call) ?? null;
+  const isActive = (u: ToolUnit) => {
+    const s = series();
+    const lastMsg = s.extras.at(-1) ?? s.msg;
+    return running() && !u.result && !!u.call?.toolId && (
       ctx.toolStarts()[u.call.toolId] != null || ctx.toolProgress()[u.call.toolId] != null ||
       ctx.pendingApproval()?.callId === u.call.toolId ||
-      ((series.extras.at(-1) ?? series.msg).streaming === true &&
-        (series.extras.at(-1) ?? series.msg).blocks.some((b) => b.toolId === u.call?.toolId) &&
+      (lastMsg.streaming === true &&
+        lastMsg.blocks.some((b) => b.toolId === u.call?.toolId) &&
         u.call.toolId === tailCall()?.call?.toolId));
-  const isPending = (u: ToolUnit) => running() && !u.result && !!u.call?.toolId &&
-    (series.extras.at(-1) ?? series.msg).blocks.some((b) => b.type === "tool_call" && b.toolId === u.call?.toolId);
-  const lastEntryIdx = () => (series.entries?.length ?? 0) - 1;
+  };
+  const isPending = (u: ToolUnit) => {
+    const s = series();
+    const lastMsg = s.extras.at(-1) ?? s.msg;
+    return running() && !u.result && !!u.call?.toolId &&
+      lastMsg.blocks.some((b) => b.type === "tool_call" && b.toolId === u.call?.toolId);
+  };
+  const lastEntryIdx = () => (series().entries?.length ?? 0) - 1;
   /** A stale thinking timer (snapshot restart mid-tools) must not spin:
    * live only while the turn's tail is still thinking. */
-  const tailIsThinking = () => series.entries?.[lastEntryIdx()]?.kind === "thinking";
+  const tailIsThinking = () => series().entries?.[lastEntryIdx()]?.kind === "thinking";
   const thinkingHidden = () => !ctx.verboseChat();
-  const visibleRuns = createMemo(() => groupToolRuns(series.entries));
-  const onlyThinking = createMemo(() => series.entries.every((e) => e.kind === "thinking") && series.units.length === 0);
-  const singleThinking = createMemo(() => onlyThinking() && series.entries.length === 1);
+  const visibleRuns = createMemo(() => groupToolRuns(series().entries));
   const singleThinkingEntry = () => {
-    const first = series.entries[0];
+    const first = series().entries[0];
     return singleThinking() && first?.kind === "thinking" ? first : undefined;
   };
   const singleThinkingLive = () => {
@@ -162,7 +175,11 @@ function renderTurnAggregate(
     return summary();
   };
   return (
-    <div class="w-full flex flex-col my-0.5" style={onlyThinking() && thinkingHidden() ? { display: "none" } : undefined}>
+    <div
+      data-tool-aggregate={series().id || series().msg.id}
+      class="w-full min-w-0 flex flex-col my-0.5"
+      style={onlyThinking() && thinkingHidden() ? { display: "none" } : undefined}
+    >
       <DisclosureTrigger
         open={open()}
         aria-expanded={open()}
@@ -175,7 +192,7 @@ function renderTurnAggregate(
         <span data-thinking-label={singleThinking() ? "" : undefined} class={`truncate min-w-0 tabular-nums ${headerShimmerActive() ? "ui-shimmer font-medium text-fg-secondary" : ""}`} style={shimmerStyle()}>
           {headerLabel()}
         </span>
-        <Show when={ctx.specialProgress(series.units)}>
+        <Show when={ctx.specialProgress(series().units)}>
           {(t) => (
             <span class="font-mono text-2xs text-fg-muted truncate max-w-[40%] sm:max-w-[14rem]">
               {t()}
@@ -184,8 +201,8 @@ function renderTurnAggregate(
         </Show>
       </DisclosureTrigger>
       <DisclosureBody open={open() && !(onlyThinking() && thinkingHidden())} keepMounted={running()}>
-        <div class="ml-1.5 mt-1 mb-1.5 pl-3 border-l border-border space-y-0.5">
-          <For each={series.entries}>
+        <div class="ml-1.5 mt-1 mb-1.5 pl-3 border-l border-border space-y-0.5 min-w-0">
+          <For each={series().entries}>
             {(entry, ei) => {
               const tail = () => ei() === lastEntryIdx();
               if (entry.kind === "tools") {
@@ -197,7 +214,7 @@ function renderTurnAggregate(
                 const live = () => tail() && tailIsThinking() && running() && entry.isNewest &&
                   entry.msg.id === lastTurnId() && ctx.thinkingStart() !== null;
                 const content = () => (entry.block.reasoning || "").trim() !== "";
-                return renderThinkingRow(ctx, entry, () => (live() && content()) || (open() && onlyThinking()), thinkingHidden, live, live, running, singleThinking);
+                return renderThinkingRow(ctx, entry, () => (live() && content()) || (open() && onlyThinking()), thinkingHidden, live, live, running, singleThinking, allowAutoCollapse);
               }
               return renderImageBlock(ctx, entry.block);
             }}
@@ -214,9 +231,9 @@ export function AssistantTurnContent(props: { ctx: TranscriptRenderCtx; block: R
     <Show when={props.block.kind === "series" ? props.block : undefined}
       fallback={renderSingleAssistant(props.ctx, props.block.msg)}>
       {(series) => (
-        <div data-assistant-message={series().textMsg?.id || series().msg.id} class="w-full space-y-2.5">
+        <div data-assistant-message={series().textMsg?.id || series().msg.id} class="w-full min-w-0 space-y-2.5">
           <Show when={series().entries.length > 0}>
-            {renderTurnAggregate(props.ctx, series())}
+            {renderTurnAggregate(props.ctx, series)}
           </Show>
           <Show when={series().textMsg}>
             {(textMsg) => (
@@ -238,7 +255,7 @@ export function AssistantTurnContent(props: { ctx: TranscriptRenderCtx; block: R
 /** Plain assistant bubble for turns with no tools and no thinking. */
 function renderSingleAssistant(ctx: TranscriptRenderCtx, msg: ChatMessage) {
   return (
-    <div data-assistant-message={msg.id} class="w-full space-y-2.5">
+    <div data-assistant-message={msg.id} class="w-full min-w-0 space-y-2.5">
       <For each={msg.blocks.filter((b) => b.type === "image" || (b.type === "text" && !!b.text?.trim()))}>
         {(block) => block.type === "image" ? renderImageBlock(ctx, block) : (
           <div class="rc-markdown w-full text-sm leading-relaxed break-words overflow-x-auto">
@@ -306,21 +323,22 @@ function renderToolSegs(ctx: TranscriptRenderCtx, msgId: string, units: () => To
       ? `u:${seg.unit.call?.toolId || seg.unit.result?.toolId || "i" + seg.idx}`
       : `g:${seg.cat}:${seg.units[0]?.call?.toolId || seg.units[0]?.result?.toolId || "0"}`;
   return (
-    <div class="w-full space-y-0.5" style={{ "overflow-anchor": "none" }}>
+    <div class="w-full min-w-0 space-y-0.5" style={{ "overflow-anchor": "none" }}>
       <For each={state.segs}>
         {(seg) => {
           if (seg.kind === "unit")
             return (
-              <div data-toolseg={segKey(seg)} style={{ "overflow-anchor": "none" }}>
+              <div class="w-full min-w-0" data-toolseg={segKey(seg)} style={{ "overflow-anchor": "none" }}>
                 {renderToolUnit(ctx, msgId, seg.unit, seg.idx, running, () => isActive(seg.unit))}
               </div>
             );
           const active = () => running() && seg.units.some(isPending);
-          // Sub-groups open while they hold live work; a finished group
-          // (and its rows) falls back to closed on its own.
-          const { open, toggle } = createDisclosure(() => `${running()}:${active()}`, active, ctx.isPinned);
+          // Sub-groups open while they hold live work and always auto-collapse
+          // when their work or the parent aggregate finishes; post-finish manual
+          // opens stay preserved because `phase` remains `"false:false"`.
+          const { open, toggle } = createDisclosure(() => `${running()}:${active()}`, active);
           return (
-            <div class="w-full flex flex-col" data-toolseg={segKey(seg)} style={{ "overflow-anchor": "none" }}>
+            <div class="w-full min-w-0 flex flex-col" data-toolseg={segKey(seg)} style={{ "overflow-anchor": "none" }}>
               <Show when={seg.units.length > 1}>
                 <DisclosureTrigger
                   open={open()}
@@ -332,7 +350,7 @@ function renderToolSegs(ctx: TranscriptRenderCtx, msgId: string, units: () => To
                 </DisclosureTrigger>
               </Show>
               <DisclosureBody open={seg.units.length === 1 || open()} keepMounted={running()}>
-                <div class={seg.units.length > 1 ? "ml-1.5 border-l border-border-subtle pl-3 space-y-0.5 mt-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
+                <div class={seg.units.length > 1 ? "ml-1.5 border-l border-border-subtle pl-3 space-y-0.5 mt-0.5 min-w-0" : "space-y-0.5 min-w-0"} style={{ "overflow-anchor": "none" }}>
                   <For each={seg.units}>
                     {(u) => {
                       // Keep fallback keys relative to the complete tool run.
@@ -354,7 +372,7 @@ function renderToolUnit(ctx: TranscriptRenderCtx, msgId: string, u: ToolUnit, ui
   const m = useToolUnitModel(ctx, msgId, u, ui, running, active);
   const part = { ctx, msgId, u, m, get running() { return running(); }, get active() { return active(); } };
   return (
-    <div class="w-full flex flex-col">
+    <div class="w-full min-w-0 flex flex-col">
       <ToolUnitHeader {...part} />
       <DisclosureBody open={m.openBody()} keepMounted={running()}>
         <ToolBody {...part} />

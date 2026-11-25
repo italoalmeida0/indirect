@@ -18,7 +18,7 @@ import {
 import { partitionToolSegs } from "../web/src/indirect-code/utils/toolSegs";
 import { synthesizeEditSectionsFromArgs } from "../web/src/indirect-code/utils/toolEdits";
 import { useToolUnitModel } from "../web/src/indirect-code/components/tool/toolUnitModel";
-import { isHeaderOnlySleep, toolSummary } from "../web/src/indirect-code/transcript";
+import { decapitalizeToolTarget, isHeaderOnlySleep, toolSummary } from "../web/src/indirect-code/transcript";
 
 /** Strip `//` and `/* ... *\/` comments while keeping string/template literals intact. */
 function stripJsComments(source: string): string {
@@ -411,7 +411,7 @@ describe("toolSummary across every daemon builtin tool", () => {
     ).toEqual({
       icon: "mdi:language-javascript",
       verb: "Read",
-      target: "Background Task#L1-1",
+      target: "Background task#L1-1",
     });
     expect(toolSummary(mkUnit("bg_await", { max_wait_seconds: 30, reason: "waiting for server" }, { durationMs: 12000 }))).toEqual({
       icon: "lucide:timer",
@@ -421,8 +421,128 @@ describe("toolSummary across every daemon builtin tool", () => {
     expect(toolSummary(mkUnit("bg_cancel", { job_id: "bg_1" }, { text: "cancelled" }))).toEqual({
       icon: "lucide:terminal",
       verb: "Canceled",
-      target: "Terminal Background Task",
+      target: "Terminal background task",
     });
+
+    // Task summaries propagate to bg_check, bg_tail, and bg_cancel (live details & WAL envelopes)
+    expect(
+      toolSummary(
+        mkUnit(
+          "bg_check",
+          { job_id: "bg_dev" },
+          { text: "1:listening", details: { env: { kind: "bash", summary: "Dev server startup", page: "1-20/20" } } },
+        ),
+      ),
+    ).toEqual({
+      icon: "lucide:terminal",
+      verb: "Read",
+      target: "Dev server startup#L1-20",
+    });
+    expect(
+      toolSummary(
+        mkUnit(
+          "bg_check",
+          { job_id: "bg_dev" },
+          { text: `<tool_result type="ok" kind="bash" status="running" command="bun run dev" summary="Dev server startup" page="5-12/12">5:ready</tool_result>` },
+        ),
+      ),
+    ).toEqual({
+      icon: "lucide:terminal",
+      verb: "Read",
+      target: "Dev server startup#L5-12",
+    });
+    expect(toolSummary(mkUnit("bg_check", { job_id: "bg_dev" }))).toEqual({
+      icon: "lucide:terminal",
+      verb: "Reading",
+      target: "Background task",
+    });
+    expect(
+      toolSummary(
+        mkUnit(
+          "bg_tail",
+          { job_id: "1a2b3c4d5e6f7a8b_9f8e7d6c5b4a3210" },
+          { text: "1:ready", details: { env: { kind: "exec_script", status: "running", summary: "Dataset transform", page: "10-25/25" } } },
+        ),
+      ),
+    ).toEqual({
+      icon: "mdi:language-javascript",
+      verb: "Tailed",
+      target: "Dataset transform#L10-25",
+      stat: "running",
+    });
+    expect(
+      toolSummary(
+        mkUnit(
+          "bg_cancel",
+          { job_id: "bg_dev" },
+          { text: `<tool_result type="ok" job_id="bg_dev" cancelled="true" status="cancelled" kind="bash" summary="Dev server startup"></tool_result>` },
+        ),
+      ),
+    ).toEqual({
+      icon: "lucide:terminal",
+      verb: "Canceled",
+      target: "Dev server startup",
+    });
+    expect(
+      toolSummary(
+        mkUnit(
+          "bg_cancel",
+          { job_id: "bg_js" },
+          { text: "", details: { cancelled: false, kind: "exec_script", summary: "Dataset transform" } },
+        ),
+      ),
+    ).toEqual({
+      icon: "mdi:language-javascript",
+      verb: "Checked",
+      target: "Dataset transform",
+    });
+    // Multiline or giant raw scripts never leak into bg_check/bg_cancel summaries
+    expect(
+      toolSummary(
+        mkUnit(
+          "bg_check",
+          { job_id: "bg_raw" },
+          { text: "1:x", details: { env: { kind: "bash", summary: "for i in 1 2 3;\ndo echo $i;\ndone", page: "1-1/1" } } },
+        ),
+      ).target,
+    ).toBe("Background task#L1-1");
+    expect(
+      toolSummary(
+        mkUnit(
+          "bg_cancel",
+          { job_id: "bg_raw" },
+          { text: "", details: { kind: "bash", summary: "x".repeat(180) } },
+        ),
+      ).target,
+    ).toBe("Terminal background task");
+  });
+
+  test("decapitalizeToolTarget lowercases sentence-cased summaries while preserving acronyms, PascalCase brands, and code tokens", () => {
+    // Ordinary sentence-cased phrases (including #L suffix, hyphens, Unicode accents)
+    expect(decapitalizeToolTarget("Check status something")).toBe("check status something");
+    expect(decapitalizeToolTarget("Git status check")).toBe("git status check");
+    expect(decapitalizeToolTarget("Dev server startup#L1-20")).toBe("dev server startup#L1-20");
+    expect(decapitalizeToolTarget("Build#L1-10")).toBe("build#L1-10");
+    expect(decapitalizeToolTarget("Cross-tenant benchmark")).toBe("cross-tenant benchmark");
+    expect(decapitalizeToolTarget("Ética e validação")).toBe("ética e validação");
+    expect(decapitalizeToolTarget("already lowercase")).toBe("already lowercase");
+    expect(decapitalizeToolTarget("")).toBe("");
+
+    // Acronyms, alphanumeric tokens, PascalCase brands, paths, code tokens, standalone "I"
+    expect(decapitalizeToolTarget("API health check")).toBe("API health check");
+    expect(decapitalizeToolTarget("HTTP server probe")).toBe("HTTP server probe");
+    expect(decapitalizeToolTarget("E2E test suite")).toBe("E2E test suite");
+    expect(decapitalizeToolTarget("S3 bucket sync")).toBe("S3 bucket sync");
+    expect(decapitalizeToolTarget("TypeScript typecheck")).toBe("TypeScript typecheck");
+    expect(decapitalizeToolTarget("GitHub PR diff")).toBe("GitHub PR diff");
+    expect(decapitalizeToolTarget("SQLite WAL verify")).toBe("SQLite WAL verify");
+    expect(decapitalizeToolTarget("WebSocket relay test")).toBe("WebSocket relay test");
+    expect(decapitalizeToolTarget("Wi-Fi diagnostics")).toBe("Wi-Fi diagnostics");
+    expect(decapitalizeToolTarget("C:/Users/dev/app")).toBe("C:/Users/dev/app");
+    expect(decapitalizeToolTarget("App.tsx")).toBe("App.tsx");
+    expect(decapitalizeToolTarget("Config.load check")).toBe("Config.load check");
+    expect(decapitalizeToolTarget("I/O stress test")).toBe("I/O stress test");
+    expect(decapitalizeToolTarget("I checked logs")).toBe("I checked logs");
   });
 
   test("formats widget_set, widget_edit, widget_read, widget_lint, and widget_list with ids, src_file, and +N -M stats", () => {
@@ -769,11 +889,21 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
 
   let renderToolBodySsr!: (
     u: ToolUnit,
-    opts: { running: boolean; active: boolean; progress?: Record<string, string> },
+    opts: {
+      running: boolean;
+      active: boolean;
+      progress?: Record<string, string>;
+      backgroundJobs?: Array<{ id: string; kind: string; label: string; command?: string; status: string }>;
+    },
   ) => string;
   let renderToolHeaderSsr!: (
     u: ToolUnit,
-    opts: { running: boolean; active: boolean; cwd?: string },
+    opts: {
+      running: boolean;
+      active: boolean;
+      cwd?: string;
+      backgroundJobs?: Array<{ id: string; kind: string; label: string; command?: string; status: string }>;
+    },
   ) => string;
   let renderBackgroundCardSsr!: (
     jobs: Array<{ id: string; kind: string; label: string; command?: string; status: string; startedAt: number; content?: string }>,
@@ -810,6 +940,7 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
                   const ctx = {
                     toolProgress: () => opts.progress ?? {},
                     toolTick: () => 0,
+                    backgroundJobs: () => opts.backgroundJobs ?? [],
                     pendingApproval: () => null,
                     pendingQuestion: () => null,
                     cancelBgJob: () => {},
@@ -828,7 +959,7 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
                     toolStarts: () => ({}),
                     turnClock: () => 0,
                     elapsedLabel: () => "",
-                    backgroundJobs: () => [],
+                    backgroundJobs: () => opts.backgroundJobs ?? [],
                     bgOutput: () => ({}),
                     bgClock: () => 0,
                     activeSession: () => ({ cwd: opts.cwd || "" }),
@@ -878,7 +1009,16 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
               namespace: "virtual-icons",
             }));
             build.onLoad({ filter: /.*/, namespace: "virtual-icons" }, () => ({
-              contents: "export const registry = {}; export const icons = {};",
+              contents: `
+                export const registry = new Proxy({}, {
+                  get(_target, prop) {
+                    if (typeof prop !== "string") return undefined;
+                    return { width: 24, height: 24, body: '<g data-glyph="' + prop + '"></g>' };
+                  }
+                });
+                export const icons = registry;
+                export default registry;
+              `,
               loader: "js",
             }));
 
@@ -1265,45 +1405,66 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
     expect(exploreWalHtml).toContain("w-full min-w-0 max-w-full");
   });
 
-  test("ToolUnitHeader renders plain summary for bash/exec_script/bg_await while ToolBody preserves full code and BackgroundCard shows summary + command preview", () => {
-    // 1. bash with summary: header renders summary text + hover tooltip with command (no ShellCmd in header)
+  test("ToolUnitHeader omits giant command tooltips, preserves path tooltips, resolves bg summaries, and BackgroundCard drops command tooltips", () => {
+    // 1. bash with summary: header renders decapitalized summary text WITHOUT any command data-rc-tip
     const bashUnit = mkUnit(
       "bash",
-      { command: "git status -sb", summary: "Git status check" },
+      { command: "git status -sb && echo " + "x".repeat(120), summary: "Git status check" },
       { text: "M src/app.ts" },
     );
     const bashHeader = renderToolHeaderSsr(bashUnit, { running: false, active: false });
     expect(bashHeader).toContain("Ran");
-    expect(bashHeader).toContain("Git status check");
-    expect(bashHeader).toContain('data-rc-tip="$ git status -sb"');
+    expect(bashHeader).toContain("git status check");
+    expect(bashHeader).not.toContain(">Git status check<");
+    expect(bashHeader).not.toContain("data-rc-tip");
     expect(bashHeader).not.toContain('class="font-mono truncate min-w-0"');
+    // Acronyms and PascalCase brands stay capitalized after the verb
+    const apiBashHeader = renderToolHeaderSsr(
+      mkUnit("bash", { command: "curl http://localhost/health", summary: "API health check" }, { text: "200" }),
+      { running: false, active: false },
+    );
+    expect(apiBashHeader).toContain("API health check");
+    const tsBashHeader = renderToolHeaderSsr(
+      mkUnit("bash", { command: "bun run typecheck", summary: "TypeScript typecheck" }, { text: "ok" }),
+      { running: false, active: false },
+    );
+    expect(tsBashHeader).toContain("TypeScript typecheck");
     // Expanded bash body STILL shows the full original command verbatim!
     const bashBody = renderToolBodySsr(bashUnit, { running: false, active: false });
     expect(bashBody).toContain("git status -sb");
     expect(bashBody).toContain("M src/app.ts");
 
-    // 2. Legacy bash without summary falls back to ShellCmd in header
+    // 2. Legacy bash without summary falls back to ShellCmd in header (still no tooltip)
     const legacyBashHeader = renderToolHeaderSsr(
       mkUnit("bash", { command: "ls -la" }, { text: "ok" }),
       { running: false, active: false },
     );
     expect(legacyBashHeader).toContain('class="font-mono truncate min-w-0"');
     expect(legacyBashHeader).toContain("ls");
+    expect(legacyBashHeader).not.toContain("data-rc-tip");
 
-    // 3. exec_script with summary: header shows summary, tooltip shows first code line, body keeps full JS code
+    // 3. exec_script with summary: header shows decapitalized summary without command/code tooltip, body keeps full JS code
     const scriptUnit = mkUnit(
       "exec_script",
       { code: "// inspect\nconst total = 40 + 2;\nconsole.log(total);", summary: "Total calculation script" },
       { text: "42" },
     );
     const scriptHeader = renderToolHeaderSsr(scriptUnit, { running: false, active: false });
-    expect(scriptHeader).toContain("Total calculation script");
-    expect(scriptHeader).toContain('data-rc-tip="> const total = 40 + 2;"');
+    expect(scriptHeader).toContain("total calculation script");
+    expect(scriptHeader).not.toContain("data-rc-tip");
     const scriptBody = renderToolBodySsr(scriptUnit, { running: false, active: false });
     expect(scriptBody).toContain("const total = 40 + 2;");
     expect(scriptBody).toContain("console.log(total);");
 
-    // 4. bg_await with summary renders summary cleanly in header
+    // 4. File path tools STILL retain their path tooltip & exact filename casing in ToolUnitHeader
+    const readHeader = renderToolHeaderSsr(
+      mkUnit("read", { path: "src/README.md" }, { text: "1:export {};" }),
+      { running: false, active: false, cwd: "/workspace/repo" },
+    );
+    expect(readHeader).toContain('data-rc-tip="/workspace/repo/src/README.md"');
+    expect(readHeader).toContain("README.md#L1-1");
+
+    // 5. bg_await, bg_list, and explore decapitalize sentence-cased phrases after the verb
     const awaitHeader = renderToolHeaderSsr(
       mkUnit(
         "bg_await",
@@ -1313,22 +1474,141 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
       { running: false, active: false },
     );
     expect(awaitHeader).toContain("Waited");
-    expect(awaitHeader).toContain("8s · Unit test completion");
+    expect(awaitHeader).toContain("8s · unit test completion");
 
-    // 5. BackgroundCard shows human summary label + preserved command preview when distinct, and falls back to ShellCmd for legacy jobs
+    const bgListHeader = renderToolHeaderSsr(
+      mkUnit("bg_list", {}, { text: "(none)" }),
+      { running: false, active: false },
+    );
+    expect(bgListHeader).toContain("Checked");
+    expect(bgListHeader).toContain("background jobs");
+
+    const exploreHeader = renderToolHeaderSsr(
+      mkUnit("explore", { task: "Inspect auth middleware" }, { text: "Found middleware." }),
+      { running: false, active: false },
+    );
+    expect(exploreHeader).toContain("Explored");
+    expect(exploreHeader).toContain("inspect auth middleware");
+
+    // 6. bg_check / bg_tail / bg_cancel resolve task summary from backgroundJobs while running or on legacy WAL
+    const bgJobs = [
+      {
+        id: "bg_dev",
+        kind: "bash",
+        label: "Dev server startup",
+        command: "bun run dev --port 3000",
+        status: "running",
+      },
+      {
+        id: "bg_js",
+        kind: "exec_script",
+        label: "Dataset transform",
+        command: "console.log('transform')",
+        status: "running",
+      },
+      {
+        id: "bg_giant_legacy",
+        kind: "bash",
+        label: "echo line1\necho line2\n" + "z".repeat(120),
+        status: "running",
+      },
+    ];
+    const cancelRunningHdr = renderToolHeaderSsr(mkUnit("bg_cancel", { job_id: "bg_js" }), {
+      running: true,
+      active: true,
+      backgroundJobs: bgJobs,
+    });
+    expect(cancelRunningHdr).toContain("Canceling");
+    expect(cancelRunningHdr).toContain("dataset transform");
+    expect(cancelRunningHdr).toContain('data-glyph="mdi:language-javascript"');
+    expect(cancelRunningHdr).not.toContain("Terminal background task");
+
+    // Errored bg_cancel without kind attr still resolves JS icon from linked background job
+    const cancelErrHdr = renderToolHeaderSsr(
+      mkUnit("bg_cancel", { job_id: "bg_js" }, { text: "failed to stop", isError: true }),
+      { running: false, active: false, backgroundJobs: bgJobs },
+    );
+    expect(cancelErrHdr).toContain("Failed");
+    expect(cancelErrHdr).toContain("dataset transform");
+    expect(cancelErrHdr).toContain('data-glyph="mdi:language-javascript"');
+
+    const checkLegacyWalHdr = renderToolHeaderSsr(
+      mkUnit("bg_check", { job_id: "bg_dev" }, { text: "10:ready", details: { env: { kind: "bash", page: "10-20/20" } } }),
+      { running: false, active: false, backgroundJobs: bgJobs },
+    );
+    expect(checkLegacyWalHdr).toContain("Read");
+    expect(checkLegacyWalHdr).toContain("dev server startup#L10-20");
+
+    const tailWithSummaryHdr = renderToolHeaderSsr(
+      mkUnit("bg_tail", { job_id: "bg_js" }, { text: "1:ok", details: { env: { kind: "exec_script", page: "1-5/5" } } }),
+      { running: false, active: false, backgroundJobs: bgJobs },
+    );
+    expect(tailWithSummaryHdr).toContain("Tailed");
+    expect(tailWithSummaryHdr).toContain("dataset transform#L1-5");
+    expect(tailWithSummaryHdr).not.toContain("font-mono text-xs");
+
+    const checkGiantLegacyHdr = renderToolHeaderSsr(
+      mkUnit("bg_check", { job_id: "bg_giant_legacy" }, { text: "1:x", details: { env: { kind: "bash", page: "1-1/1" } } }),
+      { running: false, active: false, backgroundJobs: bgJobs },
+    );
+    expect(checkGiantLegacyHdr).toContain("background task#L1-1");
+    expect(checkGiantLegacyHdr).not.toContain("echo line1");
+
+    // 7. bg_check body shows compact summary caption above command CodeBlock; bg_cancel body uses WAL summary
+    const checkBodyHtml = renderToolBodySsr(
+      mkUnit(
+        "bg_check",
+        { job_id: "bg_dev" },
+        {
+          text: `<tool_result type="ok" kind="bash" status="running" command="bun run dev --port 3000" summary="Dev server startup" page="1-2/2">1:listening\n2:ready</tool_result>`,
+        },
+      ),
+      { running: false, active: false },
+    );
+    expect(checkBodyHtml).toContain("data-bg-check-summary");
+    expect(checkBodyHtml).toContain("Dev server startup");
+    expect(checkBodyHtml).toContain("bun run dev --port 3000");
+
+    const cancelWalBodyHtml = renderToolBodySsr(
+      mkUnit(
+        "bg_cancel",
+        { job_id: "bg_dev" },
+        {
+          text: `<tool_result type="ok" job_id="bg_dev" cancelled="true" status="cancelled" kind="bash" summary="Dev server startup"></tool_result>`,
+        },
+      ),
+      { running: false, active: false },
+    );
+    expect(stripHtmlVisibleText(cancelWalBodyHtml)).toContain("Background task canceled (Dev server startup).");
+
+    const cancelDoneWalBodyHtml = renderToolBodySsr(
+      mkUnit(
+        "bg_cancel",
+        { job_id: "bg_dev" },
+        {
+          text: `<tool_result type="ok" job_id="bg_dev" cancelled="false" status="done" kind="bash" summary="Dev server startup"></tool_result>`,
+        },
+      ),
+      { running: false, active: false },
+    );
+    expect(stripHtmlVisibleText(cancelDoneWalBodyHtml)).toContain("Background task already finished (Dev server startup).");
+
+    // 8. BackgroundCard shows human summary label + command preview with ZERO command/label tooltips, keeping action tooltips
+    const longCmd = "bun run dev --port 3000 --watch --host 127.0.0.1 --filter @indirect/gateway-extra-long-flag";
+    const longLegacyCmd = "sleep 30 && echo very-long-legacy-command-that-exceeds-sixty-characters-easily";
     const bgHtml = renderBackgroundCardSsr([
       {
         id: "bg_new",
         kind: "bash",
         label: "Dev server startup",
-        command: "bun run dev --port 3000",
+        command: longCmd,
         status: "running",
         startedAt: Date.now() - 5000,
       },
       {
         id: "bg_legacy",
         kind: "bash",
-        label: "sleep 30",
+        label: longLegacyCmd,
         status: "running",
         startedAt: Date.now() - 3000,
       },
@@ -1336,8 +1616,11 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
     expect(bgHtml).toContain("data-bg-label");
     expect(bgHtml).toContain("Dev server startup");
     expect(bgHtml).toContain("data-bg-command-preview");
-    expect(bgHtml).toContain("bun run dev --port 3000");
-    // Legacy row renders through ShellCmd (syntax-highlighting the numeric arg `30`)
+    expect(bgHtml).not.toContain(`data-rc-tip="${longCmd}"`);
+    expect(bgHtml).not.toContain(`data-rc-tip="${longLegacyCmd}"`);
+    expect(bgHtml).toContain('data-rc-tip="Stop task"');
+    expect(bgHtml).toContain('data-rc-tip="Show logs"');
+    expect(bgHtml).toContain('data-rc-tip="Archived tasks (0)"');
     expect(stripHtmlVisibleText(bgHtml)).toContain("sleep 30");
   });
 });

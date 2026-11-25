@@ -93,3 +93,100 @@ func TestBgCheckRequiresJobID(t *testing.T) {
 		t.Fatal("unknown task must fail")
 	}
 }
+
+func TestBgCheckSummaryAttrDistinctFromCommand(t *testing.T) {
+	tool := &BgCheckTool{Host: fakeBgCheckHost{res: BgCheckResult{
+		Found: true, Kind: "bash", Label: "Unit test execution", Command: "bun test ./test/indirect-code-ui.test.ts",
+		Status: "running", Text: "pass", From: 1, To: 1, Total: 1,
+	}}, SessionID: "s"}
+	res := bgCheck(t, tool, `{"job_id":"bg_1"}`)
+	if got := envAttr(res, "summary"); got != "Unit test execution" {
+		t.Fatalf("summary attr = %q, want %q", got, "Unit test execution")
+	}
+	if got := envAttr(res, "command"); got != "bun test ./test/indirect-code-ui.test.ts" {
+		t.Fatalf("command attr = %q", got)
+	}
+
+	// Legacy task where Label == Command must omit summary attr.
+	legacy := &BgCheckTool{Host: fakeBgCheckHost{res: BgCheckResult{
+		Found: true, Kind: "bash", Label: "sleep 15", Command: "sleep 15",
+		Status: "running", Text: "ok", From: 1, To: 1, Total: 1,
+	}}, SessionID: "s"}
+	legacyRes := bgCheck(t, legacy, `{"job_id":"bg_2"}`)
+	if got := envAttr(legacyRes, "summary"); got != "" {
+		t.Fatalf("legacy identical label/command should omit summary attr, got %q", got)
+	}
+}
+
+type fakeBgCancelHost struct {
+	out BgCancelOutcome
+	err error
+}
+
+func (h fakeBgCancelHost) CancelBackgroundJob(callerSessionID, jobID string) (BgCancelOutcome, error) {
+	return h.out, h.err
+}
+
+func TestBgCancelEmitsSummaryAttrAndDetail(t *testing.T) {
+	tool := &BgCancelTool{
+		Host: fakeBgCancelHost{out: BgCancelOutcome{
+			OK:     true,
+			Status: "cancelled",
+			Kind:   "bash",
+			Label:  "Dev server startup",
+			Notice: "Background task Dev server startup canceled.",
+		}},
+		SessionID: "s",
+	}
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"job_id":"bg_1"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envAttr(res, "summary"); got != "Dev server startup" {
+		t.Fatalf("summary attr = %q, want %q", got, "Dev server startup")
+	}
+	resDetails, _ := res.Details.(map[string]any)
+	if got, _ := resDetails["summary"].(string); got != "Dev server startup" {
+		t.Fatalf("details[summary] = %q, want %q", got, "Dev server startup")
+	}
+
+	// Already-finished job still carries its summary for UI header/body rendering.
+	doneTool := &BgCancelTool{
+		Host: fakeBgCancelHost{out: BgCancelOutcome{
+			OK:     false,
+			Status: "done",
+			Kind:   "exec_script",
+			Label:  "Dataset transform",
+			Notice: "Background task Dataset transform already finished.",
+		}},
+		SessionID: "s",
+	}
+	doneRes, err := doneTool.Execute(context.Background(), json.RawMessage(`{"job_id":"bg_2"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envAttr(doneRes, "summary"); got != "Dataset transform" {
+		t.Fatalf("done summary attr = %q, want %q", got, "Dataset transform")
+	}
+	doneDetails, _ := doneRes.Details.(map[string]any)
+	if got, _ := doneDetails["summary"].(string); got != "Dataset transform" {
+		t.Fatalf("done details[summary] = %q, want %q", got, "Dataset transform")
+	}
+
+	// Empty label omits summary from both Attrs and Details.
+	noLabelTool := &BgCancelTool{
+		Host: fakeBgCancelHost{out: BgCancelOutcome{OK: true, Status: "cancelled", Kind: "bash"}},
+		SessionID: "s",
+	}
+	noLabelRes, err := noLabelTool.Execute(context.Background(), json.RawMessage(`{"job_id":"bg_3"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envAttr(noLabelRes, "summary"); got != "" {
+		t.Fatalf("empty label must omit summary attr, got %q", got)
+	}
+	noLabelDetails, _ := noLabelRes.Details.(map[string]any)
+	if _, exists := noLabelDetails["summary"]; exists {
+		t.Fatalf("empty label must omit details[summary], got %#v", noLabelDetails["summary"])
+	}
+}

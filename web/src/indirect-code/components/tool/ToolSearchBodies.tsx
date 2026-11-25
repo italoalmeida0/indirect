@@ -7,6 +7,7 @@ import { FileIcon } from "../../presentation";
 import { extractArrivalSpillInfo, formatSpillBytes, type ArrivalSpillInfo } from "../../utils/contextTools";
 import { parseGlobList, parseInspectTree } from "../../utils/toolTrees";
 import { isDaemonBuiltinTool } from "../../utils/tools";
+import { bgJobSummary, conciseBgSummary } from "../../transcript";
 import type { ToolPartProps } from "./toolUnitModel";
 
 function isHttpUrl(raw: string): boolean {
@@ -559,8 +560,20 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={props.m.name() === "bg_check" || props.m.name() === "bg_tail"}>
           {(() => {
             const bgEnv = () => props.m.mergedEnv();
-            const bgCmd = () => String(bgEnv()?.command || "").trim();
-            const bgKind = () => String(bgEnv()?.kind || "");
+            const bgJobId = () =>
+              String(
+                props.m.args().job_id ||
+                  props.m.args().id ||
+                  (props.u.result?.toolDetails as any)?.background_job_id ||
+                  "",
+              ).trim();
+            const bgLinkedJob = () =>
+              bgJobId() ? props.ctx.backgroundJobs?.().find((j) => j.id === bgJobId()) : undefined;
+            const bgSummary = () =>
+              conciseBgSummary(bgEnv()?.summary ?? (props.u.result?.toolDetails as any)?.summary) ||
+              bgJobSummary(bgLinkedJob());
+            const bgCmd = () => String(bgEnv()?.command || bgLinkedJob()?.command || "").trim();
+            const bgKind = () => String(bgEnv()?.kind || bgLinkedJob()?.kind || "");
             const bgStatus = () => String(bgEnv()?.status || "");
             const bgLog = () => props.m.output() || props.m.prog() || "";
             return (
@@ -568,10 +581,10 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 <Show
                   when={bgCmd().length > 0}
                   fallback={
-                    <Show when={props.m.args().job_id || bgStatus()}>
+                    <Show when={bgSummary() || props.m.args().job_id || bgStatus()}>
                       <div class="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
-                        <span class="font-mono text-fg-secondary truncate">
-                          {String(props.m.args().job_id || "background task")}
+                        <span class={`${bgSummary() ? "font-medium" : "font-mono"} text-fg-secondary truncate`}>
+                          {bgSummary() || String(props.m.args().job_id || "background task")}
                         </span>
                         <Show when={bgStatus()}>
                           <span class="shrink-0 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
@@ -582,6 +595,14 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     </Show>
                   }
                 >
+                  <Show when={bgSummary() && bgSummary() !== bgCmd()}>
+                    <div
+                      data-bg-check-summary
+                      class="border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs font-medium text-fg-secondary truncate"
+                    >
+                      {bgSummary()}
+                    </div>
+                  </Show>
                   <div class="border-b border-border-subtle bg-surface">
                     <CodeBlock
                       embedded
@@ -727,10 +748,14 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={props.m.name() === "bg_cancel"}>
           {(() => {
             const jobLabel = () => {
+              const fromResult = conciseBgSummary(
+                props.m.mergedEnv()?.summary ?? (props.u.result?.toolDetails as any)?.summary,
+              );
+              if (fromResult) return fromResult;
               const id = String(props.m.args().job_id || "").trim();
               if (!id) return "";
               const found = props.ctx.backgroundJobs?.().find((j) => j.id === id);
-              return found?.label?.trim() || "";
+              return bgJobSummary(found);
             };
             return (
               <Show
@@ -766,11 +791,11 @@ export function ToolSearchBodies(props: ToolPartProps) {
                         size={13}
                         class={`shrink-0 ${isErr() ? "text-danger" : "text-fg-muted"}`}
                       />
-                      <span class={`truncate ${isErr() ? "text-danger" : "text-fg-secondary"}`}>
+                      <span class={isErr() ? "text-danger break-words [overflow-wrap:anywhere] min-w-0" : "truncate text-fg-secondary"}>
                         {isErr()
                           ? props.m.output() || String(props.m.mergedEnv()?.error || "Failed to cancel background task.")
                           : alreadyDone()
-                            ? props.m.output() || "Background task already finished."
+                            ? props.m.output() || `Background task already finished${jobLabel() ? ` (${jobLabel()})` : ""}.`
                             : `Background task canceled${jobLabel() ? ` (${jobLabel()})` : ""}.`}
                       </span>
                     </div>
