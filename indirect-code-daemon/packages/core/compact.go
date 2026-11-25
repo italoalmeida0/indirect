@@ -31,13 +31,37 @@ func copyVisionStateInto(dst, src *CompactionState, maxLen int) {
 	}
 }
 
-var errSummarizerToolCall = errors.New("summarizer attempted a tool call")
+const (
+	warmForkHeadroomMargin  = 256
+	warmForkMinHeadroom     = 2048
+	warmForkReasoningBuffer = 1024
+)
+
+var (
+	errSummarizerToolCall           = errors.New("summarizer attempted a tool call")
+	errWarmForkInsufficientHeadroom = errors.New("warm-prefix fork skipped: insufficient context window headroom")
+)
+
+func warmForkRequiredHeadroom(reasoning string, maxTokens int) int {
+	req := warmForkMinHeadroom
+	if level := provider.NormalizeReasoning(reasoning); level != "" {
+		rb := provider.ReasoningBudget(level)
+		if maxTokens > 0 && rb > maxTokens-warmForkReasoningBuffer {
+			rb = max(0, maxTokens-warmForkReasoningBuffer)
+		}
+		if need := rb + warmForkReasoningBuffer; need > req {
+			req = need
+		}
+	}
+	return req
+}
 
 type compactOptions struct {
 	keepTail         int
 	keepRecentTokens int
 	forceCut         bool
 	skipWarmFork     bool
+	thresholdPct     int
 }
 
 // Compact summarizes older raw transcript spans into append-only FoldBlocks
@@ -90,10 +114,11 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	history := append([]provider.Message(nil), a.messages...)
 	baseMsgIdx := a.baseMsgIdx
 	prevState := a.compactionStateLocked()
-	window := a.contextWindow
+	configuredWindow := a.contextWindow
 	system := a.System
 	toolSpecs := a.Tools.Specs()
 	a.mu.Unlock()
+	window := a.EffectiveContextWindow(configuredWindow)
 
 	if len(history) == 0 {
 		return "", fmt.Errorf("nothing to compact")
@@ -104,7 +129,7 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	totalLen := baseMsgIdx + len(history)
 
 	projected := projectMessagesAt(history, baseMsgIdx, prevState)
-	if len(projected) < CompactionMinMessages && !opts.forceCut {
+	if len(projected) < CompactionMinMessages && !opts.forceCut && !needsTier2Merge(prevState.ActiveBlocks(), window) {
 		return "", fmt.Errorf("nothing to compact: transcript below minimum (%d messages)", CompactionMinMessages)
 	}
 
@@ -161,13 +186,36 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 			globalStart = kf
 		}
 	}
+	tryRollupOnly := func(noCutErr error) (string, error) {
+		active := workingState.ActiveBlocks()
+		if !needsTier2Merge(active, window) {
+			return "", noCutErr
+		}
+		if window > 0 && !opts.forceCut {
+			used := provider.ContextTokens(system, toolSpecs, projected)
+			if used < compactTargetTokens(window, opts.thresholdPct) {
+				return "", noCutErr
+			}
+		}
+		skipWarm := opts.skipWarmFork
+		beforeBlocks := len(workingState.Blocks)
+		mergeUsage, err := a.maybeMergeTier2Blocks(ctx, workingState, window, &skipWarm, sink)
+		if err != nil {
+			return "", err
+		}
+		if len(workingState.Blocks) <= beforeBlocks {
+			return "", noCutErr
+		}
+		return a.commitCompactionState(workingState, prevState, history, baseMsgIdx, globalStart, opts, mergeUsage, false), nil
+	}
+
 	localStart := globalStart - baseMsgIdx
 	if localStart < 0 {
 		localStart = 0
 		globalStart = baseMsgIdx
 	}
 	if localStart >= len(history) {
-		return "", fmt.Errorf("nothing to compact: keep-tail covers the whole transcript")
+		return tryRollupOnly(fmt.Errorf("nothing to compact: keep-tail covers the whole transcript"))
 	}
 
 	unfolded := history[localStart:]
@@ -194,30 +242,33 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 			if opts.forceCut && len(unfolded) >= 2 {
 				localCut = adjustPairSafeLocalCut(unfolded, max(1, len(unfolded)/2))
 			} else {
-				return "", fmt.Errorf("nothing to compact: transcript fits under the keep floor")
+				return tryRollupOnly(fmt.Errorf("nothing to compact: transcript fits under the keep floor"))
 			}
 		}
 	}
 
 	if localCut <= 0 {
-		return "", fmt.Errorf("nothing to compact: transcript fits under the keep floor")
+		return tryRollupOnly(fmt.Errorf("nothing to compact: transcript fits under the keep floor"))
 	}
 	localCutIdx := localStart + localCut
 	if localCutIdx > len(history) {
 		localCutIdx = len(history)
 	}
 	if localCutIdx >= len(history) {
-		return "", fmt.Errorf("nothing to compact: keep-tail covers the whole transcript")
+		return tryRollupOnly(fmt.Errorf("nothing to compact: keep-tail covers the whole transcript"))
 	}
 	globalCutIdx := baseMsgIdx + localCutIdx
 
 	spans := sliceFoldSpans(history, localStart, localCutIdx, FoldBlockTargetTokens)
 	if len(spans) == 0 {
-		return "", fmt.Errorf("nothing to compact")
+		return tryRollupOnly(fmt.Errorf("nothing to compact"))
 	}
 
 	// Ensure visual digests exist for any ImageBlocks being folded into FoldBlocks.
-	a.ensureSpanImageDigestsAt(ctx, history, baseMsgIdx, localStart, localCutIdx, workingState)
+	a.ensureSpanImageDigestsAt(ctx, history, baseMsgIdx, localStart, localCutIdx, workingState, sink)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 
 	var totalUsage provider.Usage
 	skipWarmFork := opts.skipWarmFork
@@ -280,12 +331,25 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 
 	// Run Tier-2 merge rollup when active block count > 8 or active block
 	// tokens exceed 15% of the model context window.
-	mergeUsage, err := a.maybeMergeTier2Blocks(ctx, workingState, window, sink)
+	mergeUsage, err := a.maybeMergeTier2Blocks(ctx, workingState, window, &skipWarmFork, sink)
 	if err != nil {
 		return "", err
 	}
 	totalUsage = totalUsage.Add(mergeUsage)
 
+	return a.commitCompactionState(workingState, prevState, history, baseMsgIdx, globalCutIdx, opts, totalUsage, true), nil
+}
+
+func (a *Agent) commitCompactionState(
+	workingState *CompactionState,
+	prevState *CompactionState,
+	history []provider.Message,
+	baseMsgIdx int,
+	globalCutIdx int,
+	opts compactOptions,
+	totalUsage provider.Usage,
+	updateLatch bool,
+) string {
 	prevCount := 0
 	prevPrunedBefore := 0
 	if prevState != nil {
@@ -294,11 +358,15 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	}
 	workingState.Count = prevCount + 1
 
-	protectBudget := PruneProtectTokens
-	if opts.keepRecentTokens > 0 && opts.keepRecentTokens < protectBudget {
-		protectBudget = opts.keepRecentTokens
+	if updateLatch {
+		protectBudget := PruneProtectTokens
+		if opts.keepRecentTokens > 0 && opts.keepRecentTokens < protectBudget {
+			protectBudget = opts.keepRecentTokens
+		}
+		workingState.PrunedBefore = max(prevPrunedBefore, ComputeLatchWatermarkAt(history, baseMsgIdx, globalCutIdx, protectBudget))
+	} else {
+		workingState.PrunedBefore = max(prevPrunedBefore, workingState.PrunedBefore)
 	}
-	workingState.PrunedBefore = max(prevPrunedBefore, ComputeLatchWatermarkAt(history, baseMsgIdx, globalCutIdx, protectBudget))
 	workingState.SyncMirrors()
 	hasUsage := totalUsage.InputTokens > 0 || totalUsage.OutputTokens > 0 ||
 		totalUsage.CacheReadTokens > 0 || totalUsage.CacheWriteTokens > 0
@@ -328,26 +396,14 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 		onState(a.CompactionChain())
 	}
 
-	return workingState.PreviousSummary, nil
+	return workingState.PreviousSummary
 }
 
 func adjustPairSafeLocalCut(unfolded []provider.Message, localCut int) int {
 	if localCut <= 0 || localCut >= len(unfolded) {
 		return localCut
 	}
-	orig := localCut
-	for localCut > 0 && isToolResultHead(unfolded[localCut]) && !ownsToolCall(unfolded[localCut:], 0) {
-		localCut--
-	}
-	if localCut > 0 {
-		return localCut
-	}
-	for j := orig; j < len(unfolded); j++ {
-		if !isToolResultHead(unfolded[j]) {
-			return j
-		}
-	}
-	return orig
+	return pairSafeCutIndex(unfolded, localCut)
 }
 
 // sliceFoldSpans partitions history[rawStart:rawCutIdx] into contiguous
@@ -362,18 +418,18 @@ func sliceFoldSpans(history []provider.Message, rawStart, rawCutIdx, targetToken
 	}
 	spanMsgs := history[rawStart:rawCutIdx]
 	_, perMsg := provider.ContextTokensByMessage("", nil, spanMsgs)
+	aligned := len(perMsg) == len(spanMsgs)
 
 	prefixSum := make([]int, len(spanMsgs)+1)
 	for i := range spanMsgs {
 		t := 0
-		if i < len(perMsg) {
+		if aligned {
 			t = perMsg[i]
-		}
-		if t <= 0 {
+		} else {
 			t = provider.ContextTokens("", nil, spanMsgs[i:i+1])
 		}
-		if t <= 0 {
-			t = 1
+		if t < 0 {
+			t = 0
 		}
 		prefixSum[i+1] = prefixSum[i] + t
 	}
@@ -397,15 +453,13 @@ func sliceFoldSpans(history []provider.Message, rawStart, rawCutIdx, targetToken
 			end++
 		}
 
-		// Never split an assistant tool call from its immediately following tool results.
-		for end < len(spanMsgs) && isToolResultHead(spanMsgs[end]) {
-			end++
-		}
+		// Never split an assistant tool call from any of its tool results.
+		end = walkForwardPairSafe(spanMsgs, end)
 
 		if end < len(spanMsgs) && !isUserBoundary(spanMsgs[end]) {
 			snapped := -1
 			for u := end; u > pos; u-- {
-				if isUserBoundary(spanMsgs[u]) && rangeToks(pos, u) >= targetTokens/2 {
+				if isUserBoundary(spanMsgs[u]) && isPairSafeCut(spanMsgs, u) && rangeToks(pos, u) >= targetTokens/2 {
 					snapped = u
 					break
 				}
@@ -415,7 +469,7 @@ func sliceFoldSpans(history []provider.Message, rawStart, rawCutIdx, targetToken
 					if rangeToks(end, u) > targetTokens/3 {
 						break
 					}
-					if isUserBoundary(spanMsgs[u]) {
+					if isUserBoundary(spanMsgs[u]) && isPairSafeCut(spanMsgs, u) {
 						snapped = u
 						break
 					}
@@ -573,6 +627,11 @@ func (a *Agent) summarizeChunkWithWarmOpt(
 			if ctx.Err() != nil {
 				return "", totalUsage, ctx.Err()
 			}
+			// Warm-prefix fork truncated even on concise retry: latch skipWarmFork
+			// so subsequent spans/split-turn prefixes in this pass go straight to standalone.
+			if skipWarmFork != nil {
+				*skipWarmFork = true
+			}
 			tryStandalone = true
 		} else if err == nil && strings.TrimSpace(text) != "" {
 			return strings.TrimSpace(text), totalUsage, nil
@@ -580,16 +639,16 @@ func (a *Agent) summarizeChunkWithWarmOpt(
 			if ctx.Err() != nil {
 				return "", totalUsage, ctx.Err()
 			}
-			if err != nil && skipWarmFork != nil && (IsContextOverflow(err) || ClassifyVisionOrPayloadError(err) != nil) {
-				// Live prefix itself overflowed/rejected: latch skipWarmFork for
-				// all subsequent spans in this compaction pass so we never re-upload
-				// an oversized prefix N times.
+			if err != nil && skipWarmFork != nil && (errors.Is(err, errWarmForkInsufficientHeadroom) || IsContextOverflow(err) || ClassifyVisionOrPayloadError(err) != nil) {
+				// Live prefix itself overflowed, lacked output headroom, or was rejected:
+				// latch skipWarmFork for all subsequent spans in this compaction pass so
+				// we never re-upload an oversized or headroom-starved prefix N times.
 				*skipWarmFork = true
 			}
 			// Always fall back to pixel-free standalone runSummarizer (using
 			// SerializeConversationWithDigests) on ANY warm-prefix failure
-			// (e.g. 400 Too many images, 413, vision unsupported, overflow)
-			// before degrading to MechanicalBlockSummary.
+			// (e.g. insufficient headroom, 400 Too many images, 413, vision unsupported,
+			// overflow) before degrading to MechanicalBlockSummary.
 			tryStandalone = true
 		}
 	}
@@ -825,6 +884,7 @@ func (a *Agent) runWarmPrefixDirective(ctx context.Context, directive string, ex
 		Time:    time.Now(),
 		Meta:    map[string]string{"compaction": "summarizer_fork"},
 	})
+	configuredWindow := a.contextWindow
 	req := provider.Request{
 		Model:     a.Model,
 		System:    a.System,
@@ -835,6 +895,14 @@ func (a *Agent) runWarmPrefixDirective(ctx context.Context, directive string, ex
 		SessionID: a.SessionID,
 	}
 	a.mu.Unlock()
+
+	if effWindow := a.EffectiveContextWindow(configuredWindow); effWindow > 0 {
+		prefixTokens := provider.ContextTokens(req.System, req.Tools, req.Messages)
+		headroom := effWindow - prefixTokens - warmForkHeadroomMargin
+		if headroom < warmForkRequiredHeadroom(reasoning, maxTokens) {
+			return "", false, provider.Usage{}, errWarmForkInsufficientHeadroom
+		}
+	}
 
 	return a.streamSummarizerRequest(ctx, req, sink)
 }
@@ -868,6 +936,9 @@ func (a *Agent) EffectiveContextWindow(configured int) int {
 // MaybeAutoCompactAt evaluates the wire-ready projected context against window
 // and thresholdPct, compacting proactively when needed.
 func (a *Agent) MaybeAutoCompactAt(ctx context.Context, window int, thresholdPct int, sink func(delta string)) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	window = a.EffectiveContextWindow(window)
 	if window <= 0 {
 		return false, nil
@@ -877,36 +948,103 @@ func (a *Agent) MaybeAutoCompactAt(ctx context.Context, window int, thresholdPct
 	a.mu.Unlock()
 
 	system, tools, msgs := a.ContextSnapshot()
-	if len(msgs) <= CompactionMinMessages {
+	used := provider.ContextTokens(system, tools, msgs)
+	if !ShouldCompactAt(window, used, thresholdPct) {
 		return false, nil
 	}
-	if !ShouldCompactAt(window, provider.ContextTokens(system, tools, msgs), thresholdPct) {
+	if len(msgs) < 2 {
 		return false, nil
 	}
 
 	target := compactTargetTokens(window, thresholdPct)
-	for attempt := 0; ; attempt++ {
+	didCompact := false
+	for attempt := 0; attempt <= 2; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return didCompact, err
+		}
 		var (
 			summary string
 			err     error
 		)
 		if attempt == 0 {
-			summary, err = a.Compact(ctx, 0, sink)
+			if len(msgs) <= CompactionMinMessages {
+				// Too few messages for the non-forced CompactionMinMessages pass,
+				// yet context already exceeds target: skip straight to forceCut.
+				continue
+			}
+			summary, err = a.compactWithOptions(ctx, compactOptions{
+				thresholdPct: thresholdPct,
+			}, sink)
 		} else {
 			budget := max(1024, min(target/2, CompactionKeepRecentTokens/(1<<attempt)))
-			summary, err = a.CompactToTokenBudget(ctx, budget, sink)
+			summary, err = a.compactWithOptions(ctx, compactOptions{
+				keepRecentTokens: budget,
+				forceCut:         true,
+				thresholdPct:     thresholdPct,
+			}, sink)
+		}
+		if cerr := ctx.Err(); cerr != nil {
+			return didCompact, cerr
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return didCompact, err
 		}
 		if err != nil || summary == "" {
-			return attempt > 0, nil
+			if attempt == 0 {
+				// Non-forced attempt 0 can fail when the unfolded tail fits under
+				// hybridKeepFloor while total context is still above target.
+				// Fall through to attempt 1 (forceCut).
+				continue
+			}
+			// Forced pass could not fold further raw messages or run standard
+			// Tier-2 rollup (e.g. len(unfolded) <= 1 or giant tail tool output).
+			latchBudget := max(1024, min(target/2, CompactionKeepRecentTokens/(1<<attempt)))
+			if attempt >= 2 {
+				latchBudget = 1
+			}
+			if a.latchOverflowTail(latchBudget) {
+				didCompact = true
+				system, tools, msgs = a.ContextSnapshot()
+				used = provider.ContextTokens(system, tools, msgs)
+				if !ShouldCompactAt(window, used, thresholdPct) {
+					return true, nil
+				}
+			}
+			if attempt >= 2 && used >= window-CompactionReserveTokens {
+				if a.forceRollupActiveBlocks() {
+					didCompact = true
+				}
+			}
+			if attempt < 2 {
+				continue
+			}
+			return didCompact, nil
 		}
+		didCompact = true
 		system, tools, msgs = a.ContextSnapshot()
-		if !ShouldCompactAt(window, provider.ContextTokens(system, tools, msgs), thresholdPct) {
-			return true, nil
-		}
-		if attempt >= 2 {
+		used = provider.ContextTokens(system, tools, msgs)
+		if !ShouldCompactAt(window, used, thresholdPct) {
 			return true, nil
 		}
 	}
+
+	if err := ctx.Err(); err != nil {
+		return didCompact, err
+	}
+	if a.latchOverflowTail(1) {
+		didCompact = true
+		system, tools, msgs = a.ContextSnapshot()
+		used = provider.ContextTokens(system, tools, msgs)
+		if !ShouldCompactAt(window, used, thresholdPct) {
+			return true, nil
+		}
+	}
+	if used >= window-CompactionReserveTokens {
+		if a.forceRollupActiveBlocks() {
+			didCompact = true
+		}
+	}
+	return didCompact, nil
 }
 
 // runSummarizer issues a standalone summarization request with
@@ -944,16 +1082,30 @@ func (a *Agent) streamSummarizerRequest(ctx context.Context, req provider.Reques
 	sawToolCall := false
 	for ev := range stream {
 		switch e := ev.(type) {
+		case provider.EventStart:
+			if sink != nil {
+				sink("")
+			}
 		case provider.EventTextDelta:
 			sb.WriteString(e.Delta)
 			if sink != nil {
 				sink(e.Delta)
 			}
+		case provider.EventReasoningDelta:
+			if sink != nil {
+				sink("")
+			}
 		case provider.EventToolStart, provider.EventToolArgs, provider.EventToolEnd:
+			if sink != nil {
+				sink("")
+			}
 			sawToolCall = true
 			cancelReq()
 		case provider.EventUsage:
 			runUsage = runUsage.Add(e.Usage)
+			if sink != nil {
+				sink("")
+			}
 		case provider.EventDone:
 			if sawToolCall {
 				break
@@ -972,10 +1124,74 @@ func (a *Agent) streamSummarizerRequest(ctx context.Context, req provider.Reques
 	return sb.String(), stopLen, runUsage, nil
 }
 
+func needsTier2Merge(active []FoldBlock, window int) bool {
+	if len(active) < 2 {
+		return false
+	}
+	if len(active) > Tier2MergeBlockThreshold {
+		return true
+	}
+	if window > 0 && sumFoldBlockTokens(active) > window*Tier2MergeWindowPct/100 {
+		return true
+	}
+	return false
+}
+
+// selectTier2MergeBatch chooses the next oldest contiguous slice of active
+// FoldBlocks to roll up. Prefers Tier2MergeBatchSize contiguous Tier-1 blocks;
+// falls back to Tier2MergeBatchSize contiguous blocks of any tier (preventing
+// unbounded Tier-2 accumulation), and when active blocks still exceed the
+// window percentage budget with fewer than Tier2MergeBatchSize blocks, merges
+// the oldest contiguous run of 2..Tier2MergeBatchSize blocks.
+func selectTier2MergeBatch(active []FoldBlock, window int) (start, size int) {
+	isContiguous := func(from, n int, tier1Only bool) bool {
+		if from < 0 || from+n > len(active) || n < 2 {
+			return false
+		}
+		for j := 0; j < n; j++ {
+			b := active[from+j]
+			if tier1Only && b.Tier > 1 {
+				return false
+			}
+			if j > 0 && b.StartIdx != active[from+j-1].EndIdx {
+				return false
+			}
+		}
+		return true
+	}
+
+	// 1. Oldest contiguous batch of Tier2MergeBatchSize Tier-1 blocks.
+	for i := 0; i+Tier2MergeBatchSize <= len(active); i++ {
+		if isContiguous(i, Tier2MergeBatchSize, true) {
+			return i, Tier2MergeBatchSize
+		}
+	}
+	// 2. Oldest contiguous batch of Tier2MergeBatchSize blocks of any tier
+	//    (handles sessions that accumulate many Tier-2 blocks).
+	for i := 0; i+Tier2MergeBatchSize <= len(active); i++ {
+		if isContiguous(i, Tier2MergeBatchSize, false) {
+			return i, Tier2MergeBatchSize
+		}
+	}
+	// 3. When active blocks still exceed the window budget with < Tier2MergeBatchSize
+	//    blocks, roll up the oldest contiguous run of 2..Tier2MergeBatchSize blocks.
+	if window > 0 && sumFoldBlockTokens(active) > window*Tier2MergeWindowPct/100 {
+		for n := min(len(active), Tier2MergeBatchSize); n >= 2; n-- {
+			for i := 0; i+n <= len(active); i++ {
+				if isContiguous(i, n, false) {
+					return i, n
+				}
+			}
+		}
+	}
+	return -1, 0
+}
+
 func (a *Agent) maybeMergeTier2Blocks(
 	ctx context.Context,
 	state *CompactionState,
 	window int,
+	skipWarmFork *bool,
 	sink func(delta string),
 ) (provider.Usage, error) {
 	var totalUsage provider.Usage
@@ -983,53 +1199,21 @@ func (a *Agent) maybeMergeTier2Blocks(
 		return totalUsage, nil
 	}
 
-	needsMerge := func(active []FoldBlock) bool {
-		if len(active) < Tier2MergeBatchSize {
-			return false
-		}
-		if len(active) > Tier2MergeBlockThreshold {
-			return true
-		}
-		if window > 0 && sumFoldBlockTokens(active) > window*Tier2MergeWindowPct/100 {
-			return true
-		}
-		return false
-	}
-
 	for {
 		active := state.ActiveBlocks()
-		if !needsMerge(active) {
+		if !needsTier2Merge(active, window) {
 			break
 		}
 		if err := ctx.Err(); err != nil {
 			return totalUsage, err
 		}
 
-		// Find the oldest contiguous batch of Tier2MergeBatchSize Tier-1 active blocks.
-		batchIdx := -1
-		for i := 0; i+Tier2MergeBatchSize <= len(active); i++ {
-			allT1 := true
-			for j := 0; j < Tier2MergeBatchSize; j++ {
-				b := active[i+j]
-				if b.Tier > 1 {
-					allT1 = false
-					break
-				}
-				if j > 0 && b.StartIdx != active[i+j-1].EndIdx {
-					allT1 = false
-					break
-				}
-			}
-			if allT1 {
-				batchIdx = i
-				break
-			}
-		}
-		if batchIdx < 0 {
+		batchIdx, batchSize := selectTier2MergeBatch(active, window)
+		if batchIdx < 0 || batchSize < 2 {
 			break
 		}
 
-		group := active[batchIdx : batchIdx+Tier2MergeBatchSize]
+		group := active[batchIdx : batchIdx+batchSize]
 		var (
 			readFiles      []string
 			modFiles       []string
@@ -1055,7 +1239,7 @@ func (a *Agent) maybeMergeTier2Blocks(
 			}
 		}
 
-		mergedSummary, u, err := a.summarizeTier2Group(ctx, group, sink)
+		mergedSummary, u, err := a.summarizeTier2Group(ctx, group, skipWarmFork, sink)
 		totalUsage = totalUsage.Add(u)
 		if err != nil {
 			return totalUsage, err
@@ -1080,7 +1264,7 @@ func (a *Agent) maybeMergeTier2Blocks(
 		}
 		t2.BlockTokens = estimateFoldBlockTokens(t2)
 
-		// Tier-2 block must shrink relative to the combined Tier-1 blocks it replaces.
+		// Tier-2 block must shrink relative to the combined blocks it replaces.
 		if exceedsShrinkBudget(max(sourceBlkToks, rawToksSum), t2.BlockTokens) || (sourceBlkToks >= netShrinkFloorTokens && t2.BlockTokens > int(float64(sourceBlkToks)*NetShrinkTolerance)) {
 			t2.Summary = mechanicalTier2Summary(group)
 			t2.Topic = deriveTier2Topic(group, t2.Summary)
@@ -1102,7 +1286,7 @@ func (a *Agent) maybeMergeTier2Blocks(
 	return totalUsage, nil
 }
 
-func (a *Agent) summarizeTier2Group(ctx context.Context, group []FoldBlock, sink func(delta string)) (string, provider.Usage, error) {
+func (a *Agent) summarizeTier2Group(ctx context.Context, group []FoldBlock, skipWarmFork *bool, sink func(delta string)) (string, provider.Usage, error) {
 	var totalUsage provider.Usage
 	if err := ctx.Err(); err != nil {
 		return "", totalUsage, err
@@ -1117,7 +1301,7 @@ func (a *Agent) summarizeTier2Group(ctx context.Context, group []FoldBlock, sink
 			b.ID, b.StartIdx, max(b.StartIdx, b.EndIdx-1), strings.TrimSpace(b.Summary)))
 	}
 
-	if a.hasLivePrefixState() {
+	if a.hasLivePrefixState() && (skipWarmFork == nil || !*skipWarmFork) {
 		directive := fmt.Sprintf(`<system-reminder>INTERNAL TIER-2 COMPACTION ROLLUP — DO NOT CALL ANY TOOLS.
 Consolidate the %d chronological FoldBlock summaries below (covering messages #%d–#%d) into a single dense Tier-2 Markdown summary using headings:
 ## Goal
@@ -1139,6 +1323,9 @@ Preserve durable decisions, file paths, root causes, and unresolved items while 
 		}
 		if ctx.Err() != nil {
 			return "", totalUsage, ctx.Err()
+		}
+		if skipWarmFork != nil && (stopLen || errors.Is(err, errWarmForkInsufficientHeadroom) || IsContextOverflow(err) || ClassifyVisionOrPayloadError(err) != nil) {
+			*skipWarmFork = true
 		}
 	}
 

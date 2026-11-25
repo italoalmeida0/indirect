@@ -398,6 +398,10 @@ func (a *Agent) liveWireImageCount() int {
 // default, LearnedMaxImages when learned, and 8 MiB raw wire cap) before a turn
 // request is projected.
 func (a *Agent) prepareWireImages(ctx context.Context) {
+	a.prepareWireImagesWithProgress(ctx, nil)
+}
+
+func (a *Agent) prepareWireImagesWithProgress(ctx context.Context, sink func(string)) {
 	if ctx.Err() != nil {
 		return
 	}
@@ -446,7 +450,7 @@ func (a *Agent) prepareWireImages(ctx context.Context) {
 		existing = maps.Clone(state.ImageDigests)
 		learned = state.LearnedMaxImages
 	}
-	synthesized := a.ensureImageDigests(ctx, history, toEvict, existing, learned, forceZero)
+	synthesized := a.ensureImageDigests(ctx, history, toEvict, existing, learned, forceZero, sink)
 	if ctx.Err() != nil {
 		return
 	}
@@ -488,6 +492,16 @@ func (a *Agent) shedWireImagesReactive(
 	learnedCap *int,
 	targetKeep int,
 	forceDeterministic bool,
+) (int, int) {
+	return a.shedWireImagesReactiveWithProgress(ctx, learnedCap, targetKeep, forceDeterministic, nil)
+}
+
+func (a *Agent) shedWireImagesReactiveWithProgress(
+	ctx context.Context,
+	learnedCap *int,
+	targetKeep int,
+	forceDeterministic bool,
+	sink func(string),
 ) (int, int) {
 	if ctx.Err() != nil {
 		return 0, 0
@@ -531,7 +545,7 @@ func (a *Agent) shedWireImagesReactive(
 	forceDet := forceDeterministic || (effectiveLearned != nil && *effectiveLearned <= 0)
 	var synthesized map[string]string
 	if len(toEvict) > 0 {
-		synthesized = a.ensureImageDigests(ctx, history, toEvict, existing, effectiveLearned, forceDet)
+		synthesized = a.ensureImageDigests(ctx, history, toEvict, existing, effectiveLearned, forceDet, sink)
 	}
 	if ctx.Err() != nil {
 		return 0, len(live)
@@ -593,7 +607,7 @@ func (a *Agent) ensureSpanImageDigests(
 	startIdx, endIdx int,
 	workingState *CompactionState,
 ) {
-	a.ensureSpanImageDigestsAt(ctx, history, 0, startIdx, endIdx, workingState)
+	a.ensureSpanImageDigestsAt(ctx, history, 0, startIdx, endIdx, workingState, nil)
 }
 
 func (a *Agent) ensureSpanImageDigestsAt(
@@ -602,6 +616,7 @@ func (a *Agent) ensureSpanImageDigestsAt(
 	baseMsgIdx int,
 	startIdx, endIdx int,
 	workingState *CompactionState,
+	sink func(string),
 ) {
 	if ctx.Err() != nil || workingState == nil || startIdx < 0 || endIdx <= startIdx || startIdx >= len(history) {
 		return
@@ -652,7 +667,7 @@ func (a *Agent) ensureSpanImageDigestsAt(
 		return
 	}
 	forceDet := workingState.LearnedMaxImages != nil && *workingState.LearnedMaxImages <= 0
-	synthesized := a.ensureImageDigests(ctx, history, targets, workingState.ImageDigests, workingState.LearnedMaxImages, forceDet)
+	synthesized := a.ensureImageDigests(ctx, history, targets, workingState.ImageDigests, workingState.LearnedMaxImages, forceDet, sink)
 	if ctx.Err() != nil || len(synthesized) == 0 {
 		return
 	}
@@ -672,6 +687,7 @@ func (a *Agent) ensureImageDigests(
 	existing map[string]string,
 	learnedMax *int,
 	forceDeterministic bool,
+	sink func(string),
 ) map[string]string {
 	out := make(map[string]string, len(targets))
 	var missing []wireImageOccurrence
@@ -692,9 +708,20 @@ func (a *Agent) ensureImageDigests(
 		return out
 	}
 
+	var sinkMu sync.Mutex
+	pulse := func() {
+		if sink == nil {
+			return
+		}
+		sinkMu.Lock()
+		sink("")
+		sinkMu.Unlock()
+	}
+
 	canVision := a.Client != nil && !forceDeterministic && (learnedMax == nil || *learnedMax > 0)
 	if !canVision {
 		for _, t := range missing {
+			pulse()
 			out[t.imgKey] = BuildDeterministicImageDigest(history, t.localIdx, t.img)
 		}
 		return out
@@ -718,13 +745,14 @@ func (a *Agent) ensureImageDigests(
 				if ctx.Err() != nil {
 					return
 				}
+				pulse()
 				mu.Lock()
 				skipLLM := visionRejected
 				mu.Unlock()
 
 				var digest string
 				if !skipLLM && ctx.Err() == nil {
-					txt, unsupported := a.transcribeImageViaLLM(ctx, item.img)
+					txt, unsupported := a.transcribeImageViaLLM(ctx, item.img, pulse)
 					if ctx.Err() != nil {
 						return
 					}
@@ -745,6 +773,7 @@ func (a *Agent) ensureImageDigests(
 				mu.Lock()
 				out[item.imgKey] = digest
 				mu.Unlock()
+				pulse()
 			}
 		}()
 	}
@@ -755,7 +784,7 @@ func (a *Agent) ensureImageDigests(
 	return out
 }
 
-func (a *Agent) transcribeImageViaLLM(ctx context.Context, img provider.ImageBlock) (string, bool) {
+func (a *Agent) transcribeImageViaLLM(ctx context.Context, img provider.ImageBlock, pulse func()) (string, bool) {
 	a.mu.Lock()
 	client := a.Client
 	model := a.Model
@@ -801,11 +830,32 @@ func (a *Agent) transcribeImageViaLLM(ctx context.Context, img provider.ImageBlo
 	var streamErr error
 	for ev := range stream {
 		switch e := ev.(type) {
+		case provider.EventStart:
+			if pulse != nil {
+				pulse()
+			}
 		case provider.EventTextDelta:
 			sb.WriteString(e.Delta)
+			if pulse != nil {
+				pulse()
+			}
+		case provider.EventReasoningDelta:
+			if pulse != nil {
+				pulse()
+			}
+		case provider.EventToolStart, provider.EventToolArgs, provider.EventToolEnd:
+			if pulse != nil {
+				pulse()
+			}
 		case provider.EventUsage:
 			runUsage = runUsage.Add(e.Usage)
+			if pulse != nil {
+				pulse()
+			}
 		case provider.EventDone:
+			if pulse != nil {
+				pulse()
+			}
 			if e.Err != nil {
 				streamErr = e.Err
 			}

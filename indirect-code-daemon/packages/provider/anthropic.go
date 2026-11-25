@@ -199,6 +199,14 @@ type anthRequest struct {
 	Stream       bool              `json:"stream"`
 }
 
+const (
+	anthropicMaxInputReserve   = 4096
+	anthropicInputSafetyPad    = 256
+	anthropicMinOutputHeadroom = 256
+	anthropicMinThinkingBudget = 1024
+	anthropicMinThinkingMaxTok = anthropicMinThinkingBudget + 1 // Anthropic requires max_tokens > budget_tokens (>= 1024)
+)
+
 // ---- request building ----
 
 func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
@@ -211,30 +219,55 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		m = *c.modelOverride
 	}
 
+	// Normalize messages before estimating request tokens so stripped orphaned
+	// tool results never inflate inputEst and empty-turn placeholders are counted.
+	req.Messages = placeholderEmptyUserTurns(req.Messages)
+	req.Messages = RepairOrphanedToolResults(req.Messages)
+
+	// Resolve effective reasoning level before headroom clamping so tight
+	// windows account for thinking's minimum budget (1024 + >=1 output token).
+	level := NormalizeReasoning(req.Reasoning)
+	if c.modelOverride != nil {
+		level = ClampReasoningForModel(m, level)
+	}
+
 	maxTok := req.MaxTokens
 	if maxTok <= 0 {
 		maxTok = m.MaxOutput
 	}
-	if m.ContextWindow > 0 && maxTok > 0 {
-		reserve := m.ContextWindow / 8
-		const maxReserve = 4096
-		if reserve > maxReserve {
-			reserve = maxReserve
-		}
-		if inputEst := estimateRequestTokens(req); inputEst > reserve {
-			reserve = inputEst + 256
+	// Anthropic requires max_tokens; never send zero.
+	if maxTok <= 0 {
+		maxTok = 4096
+	}
+	if m.ContextWindow > 0 {
+		inputEst := estimateRequestTokens(req)
+		reserve := min(m.ContextWindow/8, anthropicMaxInputReserve)
+		safetyPad := min(anthropicInputSafetyPad, max(1, m.ContextWindow/8))
+		if padded := inputEst + safetyPad; padded > reserve {
+			reserve = padded
 		}
 		clamped := m.ContextWindow - reserve
-		if clamped < 1 {
-			clamped = 1
+		minHeadroom := anthropicMinOutputHeadroom
+		if level != "" {
+			minHeadroom = anthropicMinThinkingMaxTok
+		}
+		// Scale proportionally on tiny synthetic windows and never require more
+		// headroom than the caller actually requested.
+		if capFloor := max(1, m.ContextWindow/4); minHeadroom > capFloor {
+			minHeadroom = capFloor
+		}
+		if minHeadroom > maxTok {
+			minHeadroom = maxTok
+		}
+		if clamped < minHeadroom {
+			return nil, fmt.Errorf(
+				"%s: prompt is too long: estimated input (%d tokens) exceeds the context window of %d tokens",
+				c.Name(), inputEst, m.ContextWindow,
+			)
 		}
 		if maxTok > clamped {
 			maxTok = clamped
 		}
-	}
-	// Anthropic requires max_tokens; never send zero.
-	if maxTok <= 0 {
-		maxTok = 4096
 	}
 
 	out := &anthRequest{
@@ -246,15 +279,11 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	// adaptive output_config.effort (exact tier for translated egresses)
 	// plus a manual thinking budget (native Anthropic). Levels the
 	// active model doesn't advertise clamp to the nearest tier.
-	level := NormalizeReasoning(req.Reasoning)
-	if c.modelOverride != nil {
-		level = ClampReasoningForModel(m, level)
-	}
 	if level == "" {
 		out.Thinking = &anthThinking{Type: "disabled"}
 	} else {
 		out.OutputConfig = &anthOutputConfig{Effort: AnthropicAdaptiveEffort(level)}
-		if budget := min(ReasoningBudget(level), maxTok-1); budget >= 1024 {
+		if budget := min(ReasoningBudget(level), maxTok-1); budget >= anthropicMinThinkingBudget {
 			out.Thinking = &anthThinking{Type: "enabled", BudgetTokens: budget}
 		}
 	}
@@ -268,8 +297,6 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		}
 	}
 
-	req.Messages = placeholderEmptyUserTurns(req.Messages)
-	req.Messages = RepairOrphanedToolResults(req.Messages)
 	compactionCacheIdx := -1
 	for i, m := range req.Messages {
 		if m.Role == RoleUser && m.Meta != nil && m.Meta["compaction_last_block"] == "true" {
@@ -520,15 +547,21 @@ func (c *anthropicClient) messagesURL() string {
 	return strings.TrimRight(c.baseURL, "/") + "/messages"
 }
 
+func closedEventChan() <-chan Event {
+	out := make(chan Event)
+	close(out)
+	return out
+}
+
 func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event, error) {
 	endpoint := c.messagesURL()
 	wire, err := c.buildRequest(req)
 	if err != nil {
-		return nil, err
+		return closedEventChan(), err
 	}
 	body, err := json.Marshal(wire)
 	if err != nil {
-		return nil, err
+		return closedEventChan(), err
 	}
 	if c.onPayload != nil {
 		c.onPayload(endpoint, body, req)
@@ -551,14 +584,12 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 		// ranging over it terminate. A nil channel would block forever
 		// (caught on Windows: fork/regenerate/queue turns spun 10-30s
 		// on 'unsupported protocol scheme' instead of failing fast).
-		out := make(chan Event)
-		close(out)
-		return out, fmt.Errorf("%s: %w", c.Name(), err)
+		return closedEventChan(), fmt.Errorf("%s: %w", c.Name(), err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("%s: http %d: %s", c.Name(), resp.StatusCode, strings.TrimSpace(string(b)))
+		return closedEventChan(), fmt.Errorf("%s: http %d: %s", c.Name(), resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 
 	out := make(chan Event, 16)

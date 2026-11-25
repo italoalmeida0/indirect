@@ -305,3 +305,69 @@ func repairToolUseResultPairs(msgs []provider.Message) []provider.Message {
 	}
 	return out
 }
+
+// stripOrphanedToolResults removes unmatched or duplicate ToolResultBlocks
+// (matching provider.RepairOrphanedToolResults) and drops RoleTool messages
+// (or messages emptied by stripping tool results) so BuildContext and
+// ContextSnapshot match the outbound wire payload without counting phantom
+// tokens from orphaned tool results. Non-tool messages without ToolResultBlocks
+// are preserved untouched and input slices are never mutated.
+func stripOrphanedToolResults(msgs []provider.Message) []provider.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	useIDs := map[string]bool{}
+	for _, m := range msgs {
+		for _, c := range m.Content {
+			if tc, ok := c.(provider.ToolCallBlock); ok && !tc.Server && tc.ID != "" {
+				useIDs[tc.ID] = true
+			}
+		}
+	}
+	resultIDs := map[string]bool{}
+	var out []provider.Message
+	for i, m := range msgs {
+		removed := false
+		var filtered []provider.Content
+		for j, c := range m.Content {
+			tr, ok := c.(provider.ToolResultBlock)
+			if !ok {
+				if filtered != nil {
+					filtered = append(filtered, c)
+				}
+				continue
+			}
+			if !useIDs[tr.CallID] || resultIDs[tr.CallID] {
+				if filtered == nil {
+					filtered = make([]provider.Content, 0, len(m.Content)-1)
+					filtered = append(filtered, m.Content[:j]...)
+				}
+				removed = true
+				continue
+			}
+			resultIDs[tr.CallID] = true
+			if filtered != nil {
+				filtered = append(filtered, c)
+			}
+		}
+		if !removed && !(m.Role == provider.RoleTool && len(m.Content) == 0) {
+			if out != nil {
+				out = append(out, m)
+			}
+			continue
+		}
+		if out == nil {
+			out = make([]provider.Message, 0, len(msgs))
+			out = append(out, msgs[:i]...)
+		}
+		if len(filtered) > 0 {
+			cp := m
+			cp.Content = filtered
+			out = append(out, cp)
+		}
+	}
+	if out == nil {
+		return msgs
+	}
+	return out
+}

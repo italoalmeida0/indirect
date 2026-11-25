@@ -15,7 +15,8 @@ import (
 //	1. snapshot live transcript
 //	2. filterHidden  - drop messages with Meta["hidden"]="true"
 //	3. repairToolUseResultPairs - stub orphan tool_use (aborts)
-//	4. mirrorImagesForProvider - image mirror for text-centric providers (openai/openai-codex)
+//	4. stripOrphanedToolResults - drop unmatched/duplicate tool_results
+//	5. mirrorImagesForProvider - image mirror for text-centric providers (openai/openai-codex)
 //
 // Everything produced in step 5 exists only in the request.
 // Persistence (OnMessageAppended) continues to store

@@ -248,6 +248,9 @@ type turnBridge struct {
 	currentStep      int
 	lastFoldSig      foldCompactionSig
 	lastWaitExtendMs atomic.Int64
+	usageMu          sync.Mutex
+	lastEvUsage      provider.Usage
+	hasEvUsage       bool
 }
 
 type foldCompactionSig struct {
@@ -541,8 +544,14 @@ func (w *turnBridge) declareWait(op string, until time.Time) {
 	var ms int64
 	if !until.IsZero() {
 		ms = until.UnixMilli()
+		if op == "provider" {
+			w.lastWaitExtendMs.Store(time.Now().UnixMilli())
+		} else {
+			w.lastWaitExtendMs.Store(0)
+		}
+	} else {
+		w.lastWaitExtendMs.Store(0)
 	}
-	w.lastWaitExtendMs.Store(time.Now().UnixMilli())
 	select {
 	case w.env.inbox <- w.stamp(workerWaitMsg{gen: w.snap.gen, op: op, until: ms}):
 	case <-w.env.done:
@@ -551,7 +560,11 @@ func (w *turnBridge) declareWait(op string, until time.Time) {
 
 func (w *turnBridge) extendProviderWaitThrottled() {
 	now := time.Now().UnixMilli()
-	if now-w.lastWaitExtendMs.Load() >= 2000 {
+	throttleMs := int64(2000)
+	if quarter := int64(tuneWaitProvider / (4 * time.Millisecond)); quarter > 0 && quarter < throttleMs {
+		throttleMs = quarter
+	}
+	if now-w.lastWaitExtendMs.Load() >= throttleMs {
 		w.declareWait("provider", time.Now().Add(tuneWaitProvider))
 	}
 }
@@ -1436,7 +1449,30 @@ func (w *turnBridge) compactionView(state *core.CompactionState, usage provider.
 	}
 }
 
+func (w *turnBridge) recordEvUsage(cumulative provider.Usage) {
+	w.usageMu.Lock()
+	w.lastEvUsage = cumulative
+	w.hasEvUsage = true
+	w.usageMu.Unlock()
+}
+
+func (w *turnBridge) consumeEvUsage(cumulative provider.Usage) bool {
+	w.usageMu.Lock()
+	dup := w.hasEvUsage && w.lastEvUsage == cumulative
+	if dup {
+		w.hasEvUsage = false
+	}
+	w.usageMu.Unlock()
+	return dup
+}
+
 func (w *turnBridge) onUsage(cumulative provider.Usage) {
+	if w.consumeEvUsage(cumulative) {
+		// oneTurn emits EvUsage immediately before invoking OnUsage with the
+		// exact same cumulative totals; EvUsage already ran estimateContext
+		// and appended the WAL usage row.
+		return
+	}
 	cp := cumulative
 	// estimateContext runs btdby4 over the full transcript+tools (SLOW on
 	// big sessions — it runs on the worker, never the actor). Recover the
@@ -1451,9 +1487,22 @@ func (w *turnBridge) onUsage(cumulative provider.Usage) {
 	w.sendInbox(walAppendMsg{ev: walEvent{Type: walTypeUsage, Usage: &cp, Context: ctxCopy}})
 }
 
+func (w *turnBridge) clearCompactProgress() {
+	w.emit(map[string]any{
+		"type":      "agent_event",
+		"hostId":    w.cfg.HostID,
+		"sessionId": w.env.actorID,
+		"event": map[string]any{
+			"type":      "compact_progress",
+			"text":      "",
+			"turnIndex": w.snap.turnIndex,
+		},
+	})
+}
+
 func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEvent)) error {
 	if cctx.Err() != nil {
-		return nil
+		return cctx.Err()
 	}
 	threshold := w.cfg.Settings.AutoCompactThreshold
 	if w.env.cfg != nil {
@@ -1474,28 +1523,32 @@ func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEven
 	if err := w.refreshFromActor(cctx, false); err != nil {
 		return err
 	}
-	window := w.modelInfo.ContextWindow
-	if window <= 0 {
+	effWindow := w.agent.EffectiveContextWindow(w.modelInfo.ContextWindow)
+	if effWindow <= 0 {
 		return nil
 	}
 	system, tls, msgs := w.agent.ContextSnapshot()
-	used := provider.ContextTokens(system, tls, msgs)
-	needs := core.ShouldCompactAt(window, used, threshold)
-	if !needs {
-		if usable := window - maxOutputTokens(w.modelInfo) - 20000; usable > 0 {
-			needs = used >= usable
-		}
+	if len(msgs) == 0 {
+		return nil
 	}
-	if !needs {
+	used := provider.ContextTokens(system, tls, msgs)
+	if !core.ShouldCompactAt(effWindow, used, threshold) {
 		return nil
 	}
 	w.declareWait("provider", time.Now().Add(tuneWaitProvider))
 	defer w.declareWait("", time.Time{})
+	beforeSig := w.lastFoldSig
 	esink(core.EvToolProgress{Text: "Compacting older context…"})
-	_, err := w.agent.MaybeAutoCompactAt(cctx, window, threshold, func(string) {
+	did, err := w.agent.MaybeAutoCompactAt(cctx, effWindow, threshold, func(string) {
 		w.heartbeat()
 		w.extendProviderWaitThrottled()
 	})
+	if err == nil && cctx.Err() != nil {
+		err = cctx.Err()
+	}
+	if !did || err != nil || w.lastFoldSig == beforeSig {
+		w.clearCompactProgress()
+	}
 	return err
 }
 
@@ -1550,9 +1603,13 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 		w.extendProviderWaitThrottled()
 		payload["event"] = map[string]any{"type": "tool_use_end", "id": e.ID}
 	case core.EvToolProgress:
-		if e.ID == "" && e.Text != "" {
-			w.declareWait("provider", time.Now().Add(tuneWaitProvider))
-		} else if e.ID != "" {
+		if e.ID == "" {
+			if e.Text != "" {
+				w.declareWait("provider", time.Now().Add(tuneWaitProvider))
+			} else {
+				w.extendProviderWaitThrottled()
+			}
+		} else {
 			wait := tuneWaitTool
 			if w.toolNames[e.ID] == "explore" {
 				wait = max(wait, tuneWaitProvider)
@@ -1561,8 +1618,9 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 		}
 		if e.Text == "" {
 			// Internal liveness heartbeat from long-running tools (search, glob,
-			// inspect, explore): heartbeat + declareWait above refreshed watchdog
-			// progress without emitting empty WS frames.
+			// inspect, explore) or compaction/provider recovery: heartbeat +
+			// wait extension above refreshed watchdog progress without emitting
+			// empty WS frames.
 			return
 		}
 		if e.ID == "" {
@@ -1634,6 +1692,7 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 			}
 		}()
 		usageCopy := e.Cumulative
+		w.recordEvUsage(usageCopy)
 		w.sendInbox(walAppendMsg{ev: walEvent{Type: walTypeUsage, Usage: &usageCopy, Context: ctxUsage}})
 		payload["event"] = map[string]any{"type": "usage", "usage": e.Usage, "cumulative": e.Cumulative, "context": ctxUsage}
 	case core.EvTurnEnd:

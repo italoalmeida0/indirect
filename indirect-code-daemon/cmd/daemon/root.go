@@ -144,7 +144,7 @@ func (r *root) bootActors() {
 
 func defaultConfig() *DaemonConfig {
 	return &DaemonConfig{Settings: HarnessSettings{
-		AutoCompactThreshold: 95,
+		AutoCompactThreshold: 80,
 		RespectGitignore:     true,
 		ToolRender:           "box",
 		Reasoning:            "medium",

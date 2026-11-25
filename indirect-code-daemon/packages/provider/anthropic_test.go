@@ -749,3 +749,198 @@ func TestReadSSEUntilStopsWhenDoneClosed(t *testing.T) {
 		t.Fatal("readSSEUntil leaked after done channel was closed")
 	}
 }
+
+func TestAnthropicBuildRequestContextWindowOverflowAndHeadroom(t *testing.T) {
+	largeBody := strings.Repeat("alpha beta gamma delta epsilon zeta eta theta iota kappa\n", 1200)
+	baseMsgs := []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: largeBody}}}}
+	inputEst := ContextTokens("sys", nil, baseMsgs)
+	if inputEst < 5000 {
+		t.Fatalf("test fixture too small: inputEst=%d", inputEst)
+	}
+
+	t.Run("overflow_fails_fast_instead_of_clamping_to_1", func(t *testing.T) {
+		httpHits := 0
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			httpHits++
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		// Simulate a model configured with a smaller context window than inputEst.
+		window := inputEst - 500
+		c := NewGatewayAnthropic("gw_key", srv.URL, Model{
+			ID: "m", ContextWindow: window, MaxOutput: 64000, Reasoning: true,
+		}).(*anthropicClient)
+		req := Request{Model: "m", System: "sys", Reasoning: "high", MaxTokens: 64000, Messages: baseMsgs}
+
+		if _, err := c.buildRequest(req); err == nil {
+			t.Fatal("expected context-overflow error when inputEst > ContextWindow")
+		} else {
+			msg := err.Error()
+			if !strings.Contains(msg, "prompt is too long") || !strings.Contains(msg, "exceeds the context window of ") {
+				t.Fatalf("overflow error %q must match core IsContextOverflow and ParseUpstreamContextLimit patterns", msg)
+			}
+		}
+
+		// Stream must fail locally without making any HTTP call and must return a closed channel.
+		ch, err := c.Stream(context.Background(), req)
+		if err == nil {
+			t.Fatal("Stream must return overflow error")
+		}
+		if httpHits != 0 {
+			t.Fatalf("Stream must not send HTTP request on local context overflow, got %d hits", httpHits)
+		}
+		select {
+		case _, ok := <-ch:
+			if ok {
+				t.Fatal("closed error channel must not yield events")
+			}
+		default:
+			t.Fatal("Stream error channel must be closed")
+		}
+	})
+
+	t.Run("plain_headroom_boundary", func(t *testing.T) {
+		// Clamped headroom = 100 (< 256 min floor) must error.
+		tooTight := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: inputEst + anthropicInputSafetyPad + 100, MaxOutput: 8192,
+		}).(*anthropicClient)
+		if _, err := tooTight.buildRequest(Request{Model: "m", System: "sys", MaxTokens: 8192, Messages: baseMsgs}); err == nil {
+			t.Fatal("expected overflow error when plain headroom (100) < min floor (256)")
+		}
+
+		// Clamped headroom = 500 (>= 256) must succeed and clamp max_tokens to 500.
+		viable := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: inputEst + anthropicInputSafetyPad + 500, MaxOutput: 8192,
+		}).(*anthropicClient)
+		wire, err := viable.buildRequest(Request{Model: "m", System: "sys", MaxTokens: 8192, Messages: baseMsgs})
+		if err != nil {
+			t.Fatalf("expected viable plain headroom to succeed, got: %v", err)
+		}
+		if wire.MaxTokens != 500 {
+			t.Fatalf("MaxTokens = %d, want 500", wire.MaxTokens)
+		}
+		if wire.Thinking == nil || wire.Thinking.Type != "disabled" {
+			t.Fatalf("expected thinking disabled, got %+v", wire.Thinking)
+		}
+	})
+
+	t.Run("reasoning_headroom_boundary_vs_non_reasoning_model", func(t *testing.T) {
+		window := inputEst + anthropicInputSafetyPad + 600 // clamped=600: viable plain, too small for thinking (1025)
+		req := Request{Model: "m", System: "sys", Reasoning: "high", MaxTokens: 64000, Messages: baseMsgs}
+
+		// Reasoning-capable model requires >= 1025 headroom so it never sends
+		// output_config.effort with a starved max_tokens that cannot enable thinking.
+		reasonClient := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: window, MaxOutput: 64000, Reasoning: true,
+		}).(*anthropicClient)
+		if _, err := reasonClient.buildRequest(req); err == nil {
+			t.Fatal("expected overflow error when reasoning model headroom (600) < 1025")
+		}
+
+		// Non-reasoning model clamps effort to "" first, so plain 256 floor applies and 600 succeeds.
+		plainClient := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: window, MaxOutput: 64000, Reasoning: false,
+		}).(*anthropicClient)
+		wire, err := plainClient.buildRequest(req)
+		if err != nil {
+			t.Fatalf("non-reasoning model should succeed with 600 headroom: %v", err)
+		}
+		if wire.MaxTokens != 600 || wire.OutputConfig != nil || wire.Thinking == nil || wire.Thinking.Type != "disabled" {
+			t.Fatalf("unexpected non-reasoning wire config: max=%d output=%+v thinking=%+v", wire.MaxTokens, wire.OutputConfig, wire.Thinking)
+		}
+
+		// Reasoning-capable model with 2000 headroom (>= 1025) succeeds and clamps both max_tokens and thinking budget.
+		viableReason := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: inputEst + anthropicInputSafetyPad + 2000, MaxOutput: 64000, Reasoning: true,
+		}).(*anthropicClient)
+		wire, err = viableReason.buildRequest(req)
+		if err != nil {
+			t.Fatalf("reasoning model should succeed with 2000 headroom: %v", err)
+		}
+		if wire.MaxTokens != 2000 {
+			t.Fatalf("MaxTokens = %d, want 2000", wire.MaxTokens)
+		}
+		if wire.OutputConfig == nil || wire.OutputConfig.Effort != "high" {
+			t.Fatalf("OutputConfig = %+v, want high", wire.OutputConfig)
+		}
+		if wire.Thinking == nil || wire.Thinking.Type != "enabled" || wire.Thinking.BudgetTokens != 1999 {
+			t.Fatalf("Thinking = %+v, want enabled with budget 1999", wire.Thinking)
+		}
+	})
+
+	t.Run("explicit_small_max_tokens_honored_without_false_overflow", func(t *testing.T) {
+		c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: inputEst + anthropicInputSafetyPad + 100, MaxOutput: 64000, Reasoning: true,
+		}).(*anthropicClient)
+		wire, err := c.buildRequest(Request{
+			Model: "m", System: "sys", Reasoning: "low", MaxTokens: 64, Messages: baseMsgs,
+		})
+		if err != nil {
+			t.Fatalf("explicit MaxTokens=64 with 100 headroom must succeed, got: %v", err)
+		}
+		if wire.MaxTokens != 64 {
+			t.Fatalf("MaxTokens = %d, want 64", wire.MaxTokens)
+		}
+	})
+
+	t.Run("orphaned_tool_results_repaired_before_token_estimate", func(t *testing.T) {
+		orphanMsgs := []Message{
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}},
+			{Role: RoleTool, Content: []Content{
+				ToolResultBlock{CallID: "ghost-call", Content: []Content{TextBlock{Text: largeBody}}},
+			}},
+		}
+		c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: 4096, MaxOutput: 2048,
+		}).(*anthropicClient)
+		wire, err := c.buildRequest(Request{Model: "m", System: "sys", MaxTokens: 2048, Messages: orphanMsgs})
+		if err != nil {
+			t.Fatalf("orphaned tool result should be stripped before headroom check, got: %v", err)
+		}
+		if wire.MaxTokens != 2048 {
+			t.Fatalf("MaxTokens = %d, want full 2048 after orphan repair", wire.MaxTokens)
+		}
+		if len(wire.Messages) != 1 {
+			t.Fatalf("expected 1 wire message after orphan repair, got %d", len(wire.Messages))
+		}
+		if len(orphanMsgs) != 2 {
+			t.Fatalf("caller message slice must not be mutated")
+		}
+	})
+
+	t.Run("zero_max_output_still_clamps_and_detects_overflow", func(t *testing.T) {
+		// Default 4096 fallback must still clamp when ContextWindow is tight.
+		tight := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: inputEst + anthropicInputSafetyPad + 1000, MaxOutput: 0,
+		}).(*anthropicClient)
+		wire, err := tight.buildRequest(Request{Model: "m", System: "sys", MaxTokens: 0, Messages: baseMsgs})
+		if err != nil {
+			t.Fatalf("expected clamp to 1000, got error: %v", err)
+		}
+		if wire.MaxTokens != 1000 {
+			t.Fatalf("MaxTokens = %d, want 1000 (not 4096 fallback bypass)", wire.MaxTokens)
+		}
+
+		// Overflow with MaxOutput==0 and req.MaxTokens==0 must still error.
+		over := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: inputEst - 100, MaxOutput: 0,
+		}).(*anthropicClient)
+		if _, err := over.buildRequest(Request{Model: "m", System: "sys", MaxTokens: 0, Messages: baseMsgs}); err == nil {
+			t.Fatal("expected overflow error even when MaxOutput==0 and req.MaxTokens==0")
+		}
+	})
+
+	t.Run("zero_context_window_skips_clamping", func(t *testing.T) {
+		c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{
+			ID: "m", ContextWindow: 0, MaxOutput: 0,
+		}).(*anthropicClient)
+		wire, err := c.buildRequest(Request{Model: "m", System: "sys", MaxTokens: 512, Messages: baseMsgs})
+		if err != nil {
+			t.Fatalf("ContextWindow==0 must not error: %v", err)
+		}
+		if wire.MaxTokens != 512 {
+			t.Fatalf("MaxTokens = %d, want 512", wire.MaxTokens)
+		}
+	})
+}

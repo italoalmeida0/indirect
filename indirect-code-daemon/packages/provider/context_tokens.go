@@ -137,15 +137,17 @@ func ContextTokens(system string, tools []Tool, messages []Message) int {
 	return bd.Total
 }
 
-// ContextTokensByMessage counts like ContextTokens but also returns the
-// per-message breakdown (same order as messages, skipping messages that
-// serialize to nothing). Used to locate cut points without recounting.
+// ContextTokensByMessage counts like ContextTokens and also returns the
+// per-message breakdown in strict 1:1 index alignment with messages
+// (len(per) == len(messages); messages that serialize to nothing report 0).
+// Used to locate cut points without recounting.
 func ContextTokensByMessage(system string, tools []Tool, messages []Message) (int, []int) {
 	total := ContextTokens(system, tools, messages)
 	per := make([]int, 0, len(messages))
 	for _, m := range messages {
 		role, content := anthropicCountMessage(m)
 		if content == nil {
+			per = append(per, 0)
 			continue
 		}
 		msgWantImg := messageWantedImageTokens(m)

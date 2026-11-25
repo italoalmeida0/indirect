@@ -1524,15 +1524,18 @@ func FindCutPointMsgs(msgs []provider.Message, keepRecent int, perMsg []int) Cut
 	if len(msgs) == 0 {
 		return CutPoint{Index: 0, TurnStartIndex: -1}
 	}
+	aligned := len(perMsg) == len(msgs)
 	acc := 0
 	idx := len(msgs)
 	for idx > 0 && acc < keepRecent {
 		idx--
 		n := 0
-		if idx < len(perMsg) {
+		if aligned {
 			n = perMsg[idx]
-		}
-		if n <= 0 {
+			if n < 0 {
+				n = 0
+			}
+		} else {
 			n = provider.ContextTokens("", nil, msgs[idx:idx+1])
 		}
 		acc += n
@@ -1544,20 +1547,9 @@ func FindCutPointMsgs(msgs []provider.Message, keepRecent int, perMsg []int) Cut
 		idx = len(msgs) - 1
 	}
 	walkIdx := idx
-	for idx > 0 && idx < len(msgs) && isToolCallTail(msgs[idx-1]) && isToolResultHead(msgs[idx]) {
-		idx++
-	}
-	if idx >= len(msgs) {
-		idx = len(msgs) - 1
-	}
-	for idx > 0 && isToolResultHead(msgs[idx]) && !ownsToolCall(msgs, idx) {
-		idx--
-	}
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(msgs) {
-		idx = len(msgs) - 1
+	idx = pairSafeCutIndex(msgs, idx)
+	if idx <= 0 || idx >= len(msgs) {
+		return CutPoint{Index: 0, TurnStartIndex: -1}
 	}
 
 	cut := CutPoint{TurnStartIndex: -1}
@@ -1569,30 +1561,32 @@ func FindCutPointMsgs(msgs []provider.Message, keepRecent int, perMsg []int) Cut
 		cut.Index = snapCutToUserBoundary(msgs, idx)
 	}
 	if cut.Index <= 0 && walkIdx > 0 {
-		cut = CutPoint{Index: oldestGroupStartAt(msgs, walkIdx), SplitTurn: false, TurnStartIndex: -1}
+		if fallback := oldestGroupStartAt(msgs, walkIdx); fallback > 0 && fallback < len(msgs) {
+			cut = CutPoint{Index: fallback, SplitTurn: false, TurnStartIndex: -1}
+		}
 	}
 	return cut
 }
 
 func oldestGroupStartAt(msgs []provider.Message, idx int) int {
-	for j := idx; j < len(msgs); j++ {
-		if j > 0 && isToolResultHead(msgs[j]) && (isToolCallTail(msgs[j-1]) || isToolResultHead(msgs[j-1])) {
-			continue
-		}
-		return j
+	if idx <= 0 || idx >= len(msgs) {
+		return 0
 	}
-	return idx
+	if fwd := walkForwardPairSafe(msgs, idx); fwd > 0 && fwd < len(msgs) {
+		return fwd
+	}
+	return 0
 }
 
 func snapCutToUserBoundary(msgs []provider.Message, idx int) int {
 	if idx <= 0 || idx >= len(msgs) {
 		return idx
 	}
-	if isUserBoundary(msgs[idx]) {
+	if isUserBoundary(msgs[idx]) && isPairSafeCut(msgs, idx) {
 		return idx
 	}
 	for i := idx; i < len(msgs); i++ {
-		if isUserBoundary(msgs[i]) {
+		if isUserBoundary(msgs[i]) && isPairSafeCut(msgs, i) {
 			return i
 		}
 	}
@@ -1614,7 +1608,7 @@ func isToolCallTail(m provider.Message) bool {
 		return false
 	}
 	for _, c := range m.Content {
-		if _, ok := c.(provider.ToolCallBlock); ok {
+		if tc, ok := c.(provider.ToolCallBlock); ok && !tc.Server {
 			return true
 		}
 	}
@@ -1635,16 +1629,199 @@ func isToolResultHead(m provider.Message) bool {
 	return false
 }
 
+// ownsToolCall reports whether msgs[idx] itself contains the owning
+// ToolCallBlock for every ToolResultBlock it carries, so keeping msgs[idx:]
+// does not orphan any tool result in msgs[idx]. A RoleTool message never owns
+// its own tool call (its owning assistant message precedes it in msgs[:idx]),
+// so ownsToolCall always returns false for RoleTool messages.
 func ownsToolCall(msgs []provider.Message, idx int) bool {
-	for i := idx - 1; i >= 0 && i >= idx-3; i-- {
-		if isToolCallTail(msgs[i]) {
-			return true
-		}
-		if msgs[i].Role == provider.RoleUser {
-			break
+	if idx < 0 || idx >= len(msgs) {
+		return false
+	}
+	m := msgs[idx]
+	if m.Role == provider.RoleTool {
+		return false
+	}
+	var owned map[string]bool
+	hasResult := false
+	for _, c := range m.Content {
+		if tc, ok := c.(provider.ToolCallBlock); ok && !tc.Server && tc.ID != "" {
+			if owned == nil {
+				owned = map[string]bool{}
+			}
+			owned[tc.ID] = true
 		}
 	}
-	return false
+	for _, c := range m.Content {
+		if tr, ok := c.(provider.ToolResultBlock); ok {
+			hasResult = true
+			if tr.CallID == "" || !owned[tr.CallID] {
+				return false
+			}
+		}
+	}
+	return hasResult
+}
+
+// isPairSafeCut reports whether splitting msgs into msgs[:cut] and msgs[cut:]
+// leaves no ToolResultBlock in msgs[cut:] whose owning ToolCallBlock lies in
+// msgs[:cut], and never cuts inside a contiguous isToolCallTail ->
+// isToolResultHead... group.
+func isPairSafeCut(msgs []provider.Message, cut int) bool {
+	if cut <= 0 || cut >= len(msgs) {
+		return true
+	}
+	if isToolResultHead(msgs[cut]) && !ownsToolCall(msgs, cut) {
+		j := cut - 1
+		for j >= 0 && isToolResultHead(msgs[j]) && !ownsToolCall(msgs, j) {
+			j--
+		}
+		if j >= 0 && isToolCallTail(msgs[j]) {
+			return false
+		}
+	}
+	priorCalls := map[string]bool{}
+	for i := 0; i < cut; i++ {
+		for _, c := range msgs[i].Content {
+			if tc, ok := c.(provider.ToolCallBlock); ok && !tc.Server && tc.ID != "" {
+				priorCalls[tc.ID] = true
+			}
+		}
+	}
+	if len(priorCalls) == 0 {
+		return true
+	}
+	for i := cut; i < len(msgs); i++ {
+		for _, c := range msgs[i].Content {
+			if tr, ok := c.(provider.ToolResultBlock); ok && tr.CallID != "" && priorCalls[tr.CallID] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// walkBackPairSafe moves cut backward until cut == 0 or isPairSafeCut(msgs, cut) holds.
+func walkBackPairSafe(msgs []provider.Message, cut int) int {
+	if cut <= 0 {
+		return 0
+	}
+	if cut >= len(msgs) {
+		cut = len(msgs)
+	}
+	for cut > 0 {
+		next := cut
+		if cut < len(msgs) && isToolResultHead(msgs[cut]) && !ownsToolCall(msgs, cut) {
+			j := cut - 1
+			for j >= 0 && isToolResultHead(msgs[j]) && !ownsToolCall(msgs, j) {
+				j--
+			}
+			if j >= 0 && isToolCallTail(msgs[j]) {
+				next = j
+			}
+		}
+		if next == cut {
+			callOwner := map[string]int{}
+			for i := 0; i < cut; i++ {
+				for _, c := range msgs[i].Content {
+					if tc, ok := c.(provider.ToolCallBlock); ok && !tc.Server && tc.ID != "" {
+						if _, exists := callOwner[tc.ID]; !exists {
+							callOwner[tc.ID] = i
+						}
+					}
+				}
+			}
+			if len(callOwner) > 0 {
+				for i := cut; i < len(msgs); i++ {
+					for _, c := range msgs[i].Content {
+						if tr, ok := c.(provider.ToolResultBlock); ok && tr.CallID != "" {
+							if ownerIdx, found := callOwner[tr.CallID]; found && ownerIdx < next {
+								next = ownerIdx
+							}
+						}
+					}
+				}
+			}
+		}
+		if next == cut {
+			break
+		}
+		cut = next
+	}
+	return cut
+}
+
+// walkForwardPairSafe moves cut forward until cut == len(msgs) or isPairSafeCut(msgs, cut) holds.
+func walkForwardPairSafe(msgs []provider.Message, cut int) int {
+	if cut <= 0 {
+		return 0
+	}
+	if cut >= len(msgs) {
+		return len(msgs)
+	}
+	for cut < len(msgs) {
+		next := cut
+		if isToolResultHead(msgs[cut]) && !ownsToolCall(msgs, cut) {
+			j := cut - 1
+			for j >= 0 && isToolResultHead(msgs[j]) && !ownsToolCall(msgs, j) {
+				j--
+			}
+			if j >= 0 && isToolCallTail(msgs[j]) {
+				k := cut + 1
+				for k < len(msgs) && isToolResultHead(msgs[k]) && !ownsToolCall(msgs, k) {
+					k++
+				}
+				next = k
+			}
+		}
+		if next == cut {
+			priorCalls := map[string]bool{}
+			for i := 0; i < cut; i++ {
+				for _, c := range msgs[i].Content {
+					if tc, ok := c.(provider.ToolCallBlock); ok && !tc.Server && tc.ID != "" {
+						priorCalls[tc.ID] = true
+					}
+				}
+			}
+			if len(priorCalls) > 0 {
+				lastRes := -1
+				for i := cut; i < len(msgs); i++ {
+					for _, c := range msgs[i].Content {
+						if tr, ok := c.(provider.ToolResultBlock); ok && tr.CallID != "" && priorCalls[tr.CallID] {
+							lastRes = i
+						}
+					}
+				}
+				if lastRes >= cut {
+					next = lastRes + 1
+				}
+			}
+		}
+		if next == cut {
+			break
+		}
+		cut = next
+	}
+	return cut
+}
+
+// pairSafeCutIndex adjusts a candidate cut index in (0, len(msgs)) so that
+// msgs[:cut] and msgs[cut:] never split a tool_use from any of its tool_results.
+// Prefers walking backward to include the owning assistant tool_use message in
+// the kept tail; if that reaches index 0, walks forward past the full tool group
+// so the entire group stays together in the folded prefix. Returns 0 when no
+// pair-safe split point exists in (0, len(msgs)).
+func pairSafeCutIndex(msgs []provider.Message, idx int) int {
+	if idx <= 0 || idx >= len(msgs) {
+		return 0
+	}
+	if back := walkBackPairSafe(msgs, idx); back > 0 {
+		return back
+	}
+	if fwd := walkForwardPairSafe(msgs, idx); fwd > 0 && fwd < len(msgs) {
+		return fwd
+	}
+	return 0
 }
 
 const TurnPrefixSummarizationPromptTemplate = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.

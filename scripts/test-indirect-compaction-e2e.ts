@@ -442,7 +442,8 @@ async function scenarioAuto(ctx: any) {
   const sessionId = await createAgenticSession(ctx, "e2e compact auto");
   // Threshold 70: with the small window the daemon's own heuristic
   // (usage*100 >= threshold*window) fires once heavy turns fill it.
-  await ctx.send({ type: "config", settings: { auto_compact_threshold: 70 } });
+  const cfgOn: any = await ctx.send({ type: "update_config", settings: { auto_compact_threshold: 70 } });
+  assert(cfgOn?.success, `update_config(70) failed: ${JSON.stringify(cfgOn)}`);
   try {
     await seedHeavyHistory(ctx, sessionId, 5, { stopOnCompact: true });
     const data = await waitForCompaction(ctx, sessionId, 240000);
@@ -454,7 +455,10 @@ async function scenarioAuto(ctx: any) {
   } finally {
     // Disable proactive auto-compaction so later scenarios (chain/overflow)
     // control compaction timing deterministically.
-    await ctx.send({ type: "config", settings: { auto_compact_threshold: 0 } });
+    const cfgOff: any = await ctx.send({ type: "update_config", settings: { auto_compact_threshold: 0 } });
+    if (!cfgOff?.success) {
+      log("warn", `update_config(0) reset failed: ${JSON.stringify(cfgOff)}`);
+    }
   }
 }
 
@@ -501,7 +505,8 @@ async function scenarioChain(ctx: any) {
 // turn complete plus the dedicated balloon, no duplicate bubble.
 async function scenarioOverflow(ctx: any) {
   log("test", "scenario E: reactive overflow");
-  await ctx.send({ type: "config", settings: { auto_compact_threshold: 0 } });
+  const cfgOff: any = await ctx.send({ type: "update_config", settings: { auto_compact_threshold: 0 } });
+  assert(cfgOff?.success, `update_config(0) failed: ${JSON.stringify(cfgOff)}`);
   const sessionId = await createAgenticSession(ctx, "e2e compact overflow");
   // Heavy seed: reactive CompactToTokenBudget cuts down to keepBudget (20k),
   // so 1 full Frankenstein read (~100k tokens) exceeds the retained tail budget 5x.
@@ -520,8 +525,8 @@ async function scenarioOverflow(ctx: any) {
   const data = await waitForIdle(ctx, sessionId, 900000, "OVERFLOW-RECOVERED");
   assert(assistantHasText(data?.session?.messages || [], "OVERFLOW-RECOVERED"), "turn did not recover after forced overflow");
   // Did the daemon even see the forced 400? The reactive path emits a
-  // "Context limit reached upstream" progress notice before compacting.
-  const sawNotice = ctx.events.some((e: any) => JSON.stringify(e).includes("Context limit reached upstream"));
+  // "Context limit reached — compacting older context…" progress notice before compacting.
+  const sawNotice = ctx.events.some((e: any) => JSON.stringify(e).includes("Context limit reached — compacting older context…"));
   log("test", `daemon saw forced overflow: ${sawNotice}`);
   assert(sawNotice, "daemon never reacted to the forced 400 (hook may have fired on the wrong request)");
   const comp = data?.session?.compaction;

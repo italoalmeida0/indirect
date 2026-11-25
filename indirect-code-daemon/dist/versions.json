@@ -1,6 +1,6 @@
 {
   "daemon": {
-    "version": "2.2.9",
+    "version": "2.2.10",
     "assets": {
       "darwin-amd64": "indirect-code-darwin-amd64",
       "darwin-arm64": "indirect-code-darwin-arm64",
@@ -12,14 +12,14 @@
       "windows-arm64": "indirect-code-windows-arm64.exe"
     },
     "sums": {
-      "indirect-code-darwin-amd64": "1f26750f26e8118ede8036f9522cb0ef858335ebc3be677b231c9436b048f9c1",
-      "indirect-code-darwin-arm64": "b1da5fb36be49214980ae52adc9f672de2fa221e84c7a2f13ac3b1b8b1663054",
+      "indirect-code-darwin-amd64": "6f5f35f1048a10d1c461a2a95dedcd2c7965b9f7b283580e0d60e6df9dd88eed",
+      "indirect-code-darwin-arm64": "e210c147c5f43263bb0c082567013a86715372ca27f06eab2c46c0330e024b08",
       "indirect-code-install.ps1": "b74310511d7a8882b921fe263dc6a3837882309861b7339afe3e77b5edd4f53e",
       "indirect-code-install.sh": "6efcb4f10c6f1ae68d9b31a7f05c5b95ed1538f72a1df1296196a0c0c82b02a4",
-      "indirect-code-linux-amd64": "941ed3a154d07597099ef22c3bb15affbf330370d0e389e9e74fa431f0b3a533",
-      "indirect-code-linux-arm64": "3c97559864ccad4dcc0236803198489d45d67fd2846fe8d3942c073ed97d573e",
-      "indirect-code-windows-amd64.exe": "19e4a8c26dc0f76d4eac3a3088433f6be7bb0cf9c69d33c9fa0e0550f3929751",
-      "indirect-code-windows-arm64.exe": "6d655b230ff33a1843fd6a5059949aca6c7a710bbcff9cafc3cc6a0006ca259c"
+      "indirect-code-linux-amd64": "f1d45b226ac1ef90ff2bc46e34951a1b9cc8400b4d62a4f6dfa9050e51fa6876",
+      "indirect-code-linux-arm64": "9a28b4691c2c4df90411943e6e57e409474595007e11d5937bf106788d6fa5b2",
+      "indirect-code-windows-amd64.exe": "b5688cff9b2cf81aa36284db1a3373ca95eb55cca3b5d1fe30a905b4298ed506",
+      "indirect-code-windows-arm64.exe": "74f24ee72f299fb27ccdc89e1588c2c28d4bb4a9dfb3b9b7ef1e18320d4d9f0b"
     }
   }
 }

@@ -119,3 +119,84 @@ func TestImageKeyDeterminismAndAnthropicWireExcludesGoMetadata(t *testing.T) {
 		t.Fatalf("unexpected Anthropic wire image JSON: %s", s)
 	}
 }
+
+func TestContextTokensByMessagePreservesStrictIndexAlignment(t *testing.T) {
+	// Empty slice returns empty per-message breakdown.
+	if total, per := ContextTokensByMessage("", nil, nil); total != 0 || len(per) != 0 {
+		t.Fatalf("nil messages: got total=%d per=%v, want 0 and empty", total, per)
+	}
+
+	img := ImageBlock{
+		MimeType: "image/png",
+		Data:     bytes.Repeat([]byte{0x42}, 4096),
+		Width:    1200,
+		Height:   800,
+	}
+	largeToolText := strings.Repeat("diagnostic log entry line with concrete details\n", 400)
+
+	// Mix all content==nil shapes (leading, middle, 7 consecutive reasoning-only
+	// assistant turns as observed in live E2E, and trailing) with wire-visible
+	// user, assistant, tool-call, tool-result, and image messages.
+	msgs := []Message{
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "leading thought"}}},                  // 0 -> 0
+		{Role: RoleUser, Content: []Content{TextBlock{Text: "first user turn"}}},                               // 1 -> >0
+		{Role: RoleAssistant, Content: []Content{TextBlock{Text: ""}}},                                         // 2 -> 0 (blank text)
+		{Role: RoleAssistant, Content: []Content{ToolCallBlock{ID: "srv1", Name: "web_search", Server: true}}}, // 3 -> 0 (server-only tool)
+		{Role: RoleUser, Content: nil}, // 4 -> 0 (nil user content)
+		{Role: RoleTool, Content: nil}, // 5 -> 0 (empty tool msg)
+		{Role: Role("unknown"), Content: []Content{TextBlock{Text: "ignored role"}}},    // 6 -> 0 (unknown role)
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thought 1"}}}, // 7 -> 0
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thought 2"}}}, // 8 -> 0
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thought 3"}}}, // 9 -> 0
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thought 4"}}}, // 10 -> 0
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thought 5"}}}, // 11 -> 0
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thought 6"}}}, // 12 -> 0
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thought 7"}}}, // 13 -> 0
+		{Role: RoleAssistant, Content: []Content{ // 14 -> >0
+			ToolCallBlock{ID: "tc1", Name: "read", Arguments: json.RawMessage(`{"path":"big.log"}`)},
+		}},
+		{Role: RoleTool, Content: []Content{ // 15 -> large (>2000)
+			ToolResultBlock{CallID: "tc1", Content: []Content{TextBlock{Text: largeToolText}}},
+		}},
+		{Role: RoleTool, Content: []Content{ // 16 -> image floor (>=1600)
+			ToolResultBlock{CallID: "tc2", Content: []Content{TextBlock{Text: "screenshot"}, img}},
+		}},
+		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "trailing thought"}}}, // 17 -> 0
+	}
+
+	total, per := ContextTokensByMessage("system prompt", nil, msgs)
+	if len(per) != len(msgs) {
+		t.Fatalf("len(per) = %d, want len(msgs) = %d (per=%v)", len(per), len(msgs), per)
+	}
+	if total != ContextTokens("system prompt", nil, msgs) {
+		t.Fatalf("total = %d, want ContextTokens = %d", total, ContextTokens("system prompt", nil, msgs))
+	}
+
+	zeroIndices := map[int]bool{
+		0: true, 2: true, 3: true, 4: true, 5: true, 6: true,
+		7: true, 8: true, 9: true, 10: true, 11: true, 12: true, 13: true, 17: true,
+	}
+	for i := range msgs {
+		_, single := ContextTokensByMessage("", nil, msgs[i:i+1])
+		if len(single) != 1 {
+			t.Fatalf("idx %d: single call returned len %d, want 1", i, len(single))
+		}
+		if zeroIndices[i] {
+			if per[i] != 0 {
+				t.Fatalf("idx %d: expected 0 for non-wire message, got %d", i, per[i])
+			}
+		} else if per[i] <= 0 {
+			t.Fatalf("idx %d: expected >0 for wire-visible message, got %d", i, per[i])
+		}
+		if per[i] != single[0] {
+			t.Fatalf("idx %d: per[%d]=%d shifted relative to isolated count=%d", i, i, per[i], single[0])
+		}
+	}
+
+	if per[15] < 2000 {
+		t.Fatalf("expected large tool result at exact idx 15 to report >=2000 tokens, got %d", per[15])
+	}
+	if per[16] < EstimateImageTokens(img) {
+		t.Fatalf("expected image tool result at exact idx 16 to report >=%d tokens, got %d", EstimateImageTokens(img), per[16])
+	}
+}

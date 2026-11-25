@@ -29,14 +29,16 @@ func TestContextTokensOmitsBareReasoningSummary(t *testing.T) {
 		t.Fatalf("bare ReasoningBlock.Summary must not inflate ContextTokens: got %d, want %d", sumTok, baseTok)
 	}
 
-	// Pure bare-summary assistant message serializes to nothing on the wire and in ContextTokensByMessage.
+	// Pure bare-summary assistant message serializes to nothing on the wire,
+	// so ContextTokensByMessage reports 0 at its index while preserving strict
+	// 1:1 index alignment with messages.
 	summaryOnly := []Message{
 		{Role: RoleUser, Content: []Content{TextBlock{Text: "solve this"}}},
 		{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "only thinking"}}},
 	}
 	_, per := ContextTokensByMessage("sys", nil, summaryOnly)
-	if len(per) != 1 {
-		t.Fatalf("expected summary-only assistant turn to be omitted, got per=%v", per)
+	if len(per) != len(summaryOnly) || per[0] <= 0 || per[1] != 0 {
+		t.Fatalf("expected 1:1 alignment with 0 for summary-only assistant turn, got per=%v", per)
 	}
 
 	// Encrypted thinking payload IS replayed on the wire and MUST still count.

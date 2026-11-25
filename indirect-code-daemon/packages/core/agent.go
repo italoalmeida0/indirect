@@ -719,6 +719,11 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			if ctx.Err() != nil {
 				break
 			}
+			pulseProgress := func(string) {
+				if sink != nil {
+					sink(EvToolProgress{Text: ""})
+				}
+			}
 			// Reactive multimodal & payload-cliff shedding (up to 3 passes per step).
 			if visionShedPasses < 3 {
 				if vErr := ClassifyVisionOrPayloadError(err); vErr != nil {
@@ -727,7 +732,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 					case KindVisionUnsupported:
 						if currentLive > 0 {
 							zero := 0
-							evicted, _ := a.shedWireImagesReactive(ctx, &zero, 0, true)
+							evicted, _ := a.shedWireImagesReactiveWithProgress(ctx, &zero, 0, true, pulseProgress)
+							if ctx.Err() != nil {
+								err = ctx.Err()
+								stop = provider.StopAborted
+								break
+							}
 							if evicted > 0 {
 								visionShedPasses++
 								sink(EvToolProgress{Text: "Model does not support inline images — summarizing images and retrying…"})
@@ -749,7 +759,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 							if capVal < 0 {
 								capVal = 0
 							}
-							evicted, _ := a.shedWireImagesReactive(ctx, &capVal, capVal, capVal == 0)
+							evicted, _ := a.shedWireImagesReactiveWithProgress(ctx, &capVal, capVal, capVal == 0, pulseProgress)
+							if ctx.Err() != nil {
+								err = ctx.Err()
+								stop = provider.StopAborted
+								break
+							}
 							if evicted > 0 {
 								visionShedPasses++
 								sink(EvToolProgress{Text: "Image limit reached — summarizing older images and retrying…"})
@@ -765,7 +780,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 							if currentLive <= 1 {
 								nextKeep = 0
 							}
-							evicted, _ := a.shedWireImagesReactive(ctx, nil, nextKeep, nextKeep == 0)
+							evicted, _ := a.shedWireImagesReactiveWithProgress(ctx, nil, nextKeep, nextKeep == 0, pulseProgress)
+							if ctx.Err() != nil {
+								err = ctx.Err()
+								stop = provider.StopAborted
+								break
+							}
 							if evicted > 0 {
 								visionShedPasses++
 								sink(EvToolProgress{Text: "Payload too large — summarizing older images and retrying…"})
@@ -775,6 +795,9 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 								continue
 							}
 						}
+					}
+					if ctx.Err() != nil {
+						break
 					}
 				}
 			}
@@ -799,8 +822,18 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 						latchBudget = 1
 						imgKeep = 0
 					}
-					shedCount, _ := a.shedWireImagesReactive(ctx, nil, imgKeep, overflowPasses > 1)
-					summary, compactErr := a.CompactOverflow(ctx, keepBudget, nil)
+					shedCount, _ := a.shedWireImagesReactiveWithProgress(ctx, nil, imgKeep, overflowPasses > 1, pulseProgress)
+					if ctx.Err() != nil {
+						err = ctx.Err()
+						stop = provider.StopAborted
+						break
+					}
+					summary, compactErr := a.CompactOverflow(ctx, keepBudget, pulseProgress)
+					if ctx.Err() != nil {
+						err = ctx.Err()
+						stop = provider.StopAborted
+						break
+					}
 					compacted := compactErr == nil && summary != ""
 					latched := false
 					if !compacted || overflowPasses > 1 {
@@ -1091,6 +1124,7 @@ func (a *Agent) BuildContext() []provider.Message {
 func (a *Agent) buildContextFromLocked(msgs []provider.Message, clientName string) []provider.Message {
 	msgs = filterHidden(msgs)
 	msgs = repairToolUseResultPairs(msgs)
+	msgs = stripOrphanedToolResults(msgs)
 	if mirror := mirrorImagesForProvider(clientName, msgs); mirror != nil {
 		msgs = append(msgs, *mirror)
 	}
@@ -1259,7 +1293,14 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 			return provider.StopError, provider.Message{}, 0, err
 		}
 	}
-	a.prepareWireImages(ctx)
+	a.prepareWireImagesWithProgress(ctx, func(string) {
+		if sink != nil {
+			sink(EvToolProgress{Text: ""})
+		}
+	})
+	if err := ctx.Err(); err != nil {
+		return provider.StopAborted, provider.Message{}, 0, err
+	}
 	var req provider.Request
 	for {
 		if err := a.prepareStart(ctx); err != nil {

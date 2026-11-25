@@ -636,8 +636,8 @@ func TestAutoCompactRefreshesFromActorAndCompactionDeclaresProviderWait(t *testi
 	var heavy []provider.Message
 	for i := 0; i < 8; i++ {
 		heavy = append(heavy,
-			provider.Message{ID: "u", Role: provider.RoleUser, TurnIndex: i + 1, Content: []provider.Content{provider.TextBlock{Text: strings.Repeat("heavy user context ", 600)}}},
-			provider.Message{ID: "a", Role: provider.RoleAssistant, TurnIndex: i + 1, Content: []provider.Content{provider.TextBlock{Text: strings.Repeat("heavy assistant reply ", 600)}}},
+			provider.Message{ID: "u", Role: provider.RoleUser, TurnIndex: i + 1, Content: []provider.Content{provider.TextBlock{Text: strings.Repeat("heavy user context ", 800)}}},
+			provider.Message{ID: "a", Role: provider.RoleAssistant, TurnIndex: i + 1, Content: []provider.Content{provider.TextBlock{Text: strings.Repeat("heavy assistant reply ", 800)}}},
 		)
 	}
 	ag.SetMessages(heavy)
@@ -676,7 +676,7 @@ func TestAutoCompactRefreshesFromActorAndCompactionDeclaresProviderWait(t *testi
 			brainDir: st.ensureBrainDir,
 			emit:     func(any) {},
 		},
-		modelInfo: provider.Model{ID: "claude-opus-4-6", ContextWindow: 12000, MaxOutput: 4096, Reasoning: true},
+		modelInfo: provider.Model{ID: "claude-opus-4-6", ContextWindow: 64000, MaxOutput: 4096, Reasoning: true},
 		client:    mockClient,
 		reg:       core.NewRegistry(),
 		agent:     ag,
@@ -696,6 +696,10 @@ func TestAutoCompactRefreshesFromActorAndCompactionDeclaresProviderWait(t *testi
 		t.Fatal("expected proactive autoCompact to invoke forked summarizer")
 	}
 	forkReq := capturedForkReqs[0]
+	forkPrefixTokens := provider.ContextTokens(forkReq.System, forkReq.Tools, forkReq.Messages)
+	if headroom := w.modelInfo.ContextWindow - forkPrefixTokens - 256; headroom < 8192 {
+		t.Fatalf("warm-fork test headroom too small (%d tokens for prefix=%d window=%d)", headroom, forkPrefixTokens, w.modelInfo.ContextWindow)
+	}
 	if forkReq.Reasoning != "high" {
 		t.Fatalf("autoCompact ran with stale Effort %q instead of refreshing \"high\" from actor!", forkReq.Reasoning)
 	}

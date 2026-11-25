@@ -309,6 +309,7 @@ func (a *sessionActor) handleData(env Envelope) {
 			default:
 			}
 		} else {
+			a.touch()
 			if m.allowSteer && a.state == stateRunning {
 				var steers []QueuedMessage
 				var remaining []QueuedMessage
@@ -572,7 +573,11 @@ func (a *sessionActor) handleData(env Envelope) {
 	case workerWaitMsg:
 		// V2-001: declare/clear an expected blocking window. Stamped with
 		// the turn generation — a stale worker cannot extend a new turn.
+		// Both declaring and clearing a wait prove active worker progress:
+		// refreshing lastProgress prevents a long healthy wait (>2*tuneWatchEvery)
+		// from immediately tripping watchdog_stale the instant it clears.
 		if m.gen == a.gen {
+			a.touch()
 			if m.until > time.Now().UnixMilli() {
 				a.waitOp, a.waitUntil = m.op, m.until
 			} else {
